@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MONOLOCK — phase unification prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --pre:#e8a33d; --post:#4fc8b4; --warn:#ff5c4a;
+  --ink:#c9ced6; --lbl:#8d939e; --vfd:#ffbf5e;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --disp:'Space Grotesk',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#0c0d10;font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+body{padding:28px 12px;display:flex;justify-content:center;
+  background:radial-gradient(1200px 600px at 50% -10%,#17191e,#0c0d10)}
+button{font:inherit;cursor:pointer}
+
+/* ---------- faceplate ---------- */
+.plate{position:relative;width:920px;max-width:100%;border-radius:14px;border:1px solid #101215;
+  background:
+    repeating-linear-gradient(90deg,rgba(255,255,255,0.013) 0 1px,transparent 1px 3px),
+    linear-gradient(180deg,#33363c 0%,#282b30 40%,#202328 100%);
+  box-shadow:0 30px 70px rgba(0,0,0,0.7),0 2px 0 rgba(255,255,255,0.06) inset,0 -3px 8px rgba(0,0,0,0.55) inset;
+  padding:14px 18px 12px}
+.screw{position:absolute;width:15px;height:15px;border-radius:50%;
+  background:radial-gradient(circle at 35% 28%,#7c828c,#3b3f46 62%,#1f2226);
+  box-shadow:0 1px 2px rgba(0,0,0,0.8),inset 0 -1px 2px rgba(0,0,0,0.65)}
+.screw::after{content:'';position:absolute;left:2.5px;right:2.5px;top:6.5px;height:2px;
+  background:#15171b;border-radius:1px;transform:rotate(var(--r,25deg))}
+.screw.tl{top:9px;left:9px;--r:18deg}.screw.tr{top:9px;right:9px;--r:64deg}
+.screw.bl{bottom:9px;left:9px;--r:-40deg}.screw.br{bottom:9px;right:9px;--r:5deg}
+
+/* engraved text */
+.engrave{color:var(--lbl);text-shadow:0 1px 0 rgba(255,255,255,0.06),0 -1px 0 rgba(0,0,0,0.7)}
+h2.engrave{font-size:10px;font-weight:500;letter-spacing:0.24em;margin-bottom:9px}
+
+/* ---------- brand strip ---------- */
+.brand{display:flex;align-items:center;gap:12px;padding:2px 8px 12px;
+  border-bottom:1px solid rgba(0,0,0,0.45);box-shadow:0 1px 0 rgba(255,255,255,0.05)}
+.brand .name{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:0.16em;
+  color:#b7bdc7;text-shadow:0 1px 0 rgba(255,255,255,0.08),0 -1px 1px rgba(0,0,0,0.8)}
+.brand .name b{color:var(--post);text-shadow:0 0 10px rgba(79,200,180,0.35)}
+.brand .sub{font-size:10px;letter-spacing:0.1em}
+.brand .pwr{margin-left:12px;display:flex;align-items:center;gap:6px;font-size:9.5px;letter-spacing:0.18em}
+.modesw{margin-left:auto;display:flex;border-radius:6px;overflow:hidden;border:1px solid #14161a;
+  box-shadow:0 2px 3px rgba(0,0,0,0.5)}
+.modesw .hwbtn{border:none;border-radius:0;padding:6px 14px;font-size:9.5px;letter-spacing:0.2em;box-shadow:inset 0 1px 0 rgba(255,255,255,0.08)}
+.modesw .hwbtn+.hwbtn{border-left:1px solid #14161a}
+.modesw .hwbtn.active{color:#5ae8cb;text-shadow:0 0 8px rgba(90,232,203,0.5);
+  background:linear-gradient(180deg,#22252a,#2a2d32);box-shadow:inset 0 2px 5px rgba(0,0,0,0.6)}
+
+/* ---------- LEDs ---------- */
+.led{width:8px;height:8px;border-radius:50%;background:#1b1e23;flex:none;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,0.9),0 1px 0 rgba(255,255,255,0.05)}
+.led.on{background:#5ae8cb;box-shadow:0 0 9px rgba(90,232,203,0.85),inset 0 0 2px rgba(255,255,255,0.6)}
+.led.amber{background:var(--vfd);box-shadow:0 0 9px rgba(255,191,94,0.85),inset 0 0 2px rgba(255,255,255,0.6)}
+.led.warn{background:var(--warn);box-shadow:0 0 9px rgba(255,92,74,0.85),inset 0 0 2px rgba(255,255,255,0.6)}
+.ledrow{display:flex;gap:14px;justify-content:center;padding:7px 0 1px}
+.ledrow span{display:flex;align-items:center;gap:5px;font-size:9px;letter-spacing:0.16em}
+
+/* ---------- modules ---------- */
+.face{display:grid;grid-template-columns:212px 1fr 212px;gap:16px;padding:16px 4px 12px}
+.module{display:flex;flex-direction:column;gap:9px;min-width:0}
+.inset{background:linear-gradient(180deg,#15171b,#1b1e22);border-radius:8px;border:1px solid #0e1013;
+  box-shadow:inset 0 2px 7px rgba(0,0,0,0.75),inset 0 -1px 0 rgba(255,255,255,0.045);padding:10px}
+
+/* VFD displays */
+.vfd{background:#080a08;border:1px solid #000;border-radius:4px;padding:7px 9px;
+  color:var(--vfd);text-shadow:0 0 7px rgba(255,170,60,0.5);letter-spacing:0.06em;
+  box-shadow:inset 0 2px 9px rgba(0,0,0,0.95);line-height:1.5;overflow:hidden}
+.vfd.small{font-size:10.5px;min-height:3.4em}
+#srcinfo{white-space:pre-line;word-break:break-all}
+.vfd .dim{color:#8a6a35;text-shadow:none}
+
+/* hardware buttons */
+.hwbtn{display:flex;align-items:center;gap:8px;text-align:left;color:#c4c9d1;font-size:11px;
+  padding:8px 10px;border-radius:6px;border:1px solid #14161a;
+  background:linear-gradient(180deg,#3d4147,#2b2e33);
+  box-shadow:0 2px 3px rgba(0,0,0,0.55),inset 0 1px 0 rgba(255,255,255,0.09)}
+.hwbtn:hover{background:linear-gradient(180deg,#43474d,#2f3237)}
+.hwbtn:active,.hwbtn.active{background:linear-gradient(180deg,#26292d,#2f3237);
+  box-shadow:inset 0 2px 5px rgba(0,0,0,0.6)}
+.hwbtn:focus-visible{outline:2px solid var(--post);outline-offset:2px}
+.hwbtn:disabled{opacity:0.45;cursor:default}
+.hwbtn .bled{width:7px;height:7px;border-radius:50%;background:#1b1e23;flex:none;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,0.9)}
+.hwbtn.active .bled{background:#5ae8cb;box-shadow:0 0 8px rgba(90,232,203,0.8)}
+.hwbtn.big{justify-content:center;font-size:12.5px;letter-spacing:0.12em;padding:11px}
+
+/* load slot */
+#drop{border-radius:5px;padding:13px 8px;text-align:center;font-size:10.5px;letter-spacing:0.1em;
+  color:#7d838d;cursor:pointer;background:linear-gradient(180deg,#101216,#171a1e);
+  border:1px solid #0c0e11;box-shadow:inset 0 3px 8px rgba(0,0,0,0.8),inset 0 -1px 0 rgba(255,255,255,0.04);
+  transition:color .15s,box-shadow .15s}
+#drop.hover,#drop:hover{color:var(--post);box-shadow:inset 0 3px 8px rgba(0,0,0,0.8),0 0 0 1px rgba(79,200,180,0.4)}
+
+/* ---------- scope ---------- */
+.scopewrap{display:flex;flex-direction:column;align-items:center;gap:9px}
+.tube{position:relative;border-radius:50%;padding:11px;
+  background:linear-gradient(155deg,#42464d,#17191d 70%);
+  box-shadow:inset 0 2px 4px rgba(255,255,255,0.09),inset 0 -4px 8px rgba(0,0,0,0.7),0 6px 16px rgba(0,0,0,0.55)}
+#gonio{display:block;border-radius:50%;background:#060807;
+  box-shadow:inset 0 8px 30px rgba(0,0,0,0.95);width:328px;height:328px;max-width:100%}
+.glass{position:absolute;inset:11px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle at 32% 22%,rgba(255,255,255,0.11),transparent 46%)}
+.scopechip{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+  font-size:9px;letter-spacing:0.22em;padding:3px 10px;border-radius:3px;
+  background:rgba(8,10,8,0.85);border:1px solid #000;color:var(--pre)}
+
+/* ---------- knob ---------- */
+.knobwrap{display:flex;flex-direction:column;align-items:center;gap:5px;padding-top:2px}
+#knob{cursor:ns-resize;touch-action:none;filter:drop-shadow(0 6px 8px rgba(0,0,0,0.55))}
+#knob:focus-visible{outline:2px solid var(--post);outline-offset:4px;border-radius:50%}
+#knobval{min-width:74px;text-align:center;font-size:14px;padding:4px 8px}
+.knoblbl{font-size:10px;letter-spacing:0.26em}
+
+/* ---------- drawers ---------- */
+.drawer{margin:4px 4px 0;border-radius:7px;overflow:hidden;border:1px solid #101215;
+  background:linear-gradient(180deg,#212429,#1b1e22);box-shadow:0 2px 4px rgba(0,0,0,0.4)}
+.drawer summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;
+  padding:8px 13px;font-size:10px;letter-spacing:0.24em;color:var(--lbl);
+  text-shadow:0 1px 0 rgba(255,255,255,0.06),0 -1px 0 rgba(0,0,0,0.7);
+  background:linear-gradient(180deg,#2e3137,#25282d);box-shadow:inset 0 1px 0 rgba(255,255,255,0.07)}
+.drawer summary::-webkit-details-marker{display:none}
+.drawer summary::before{content:'';width:0;height:0;border-left:5px solid #6d737d;
+  border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+.drawer[open] summary::before{transform:rotate(90deg)}
+.drawer summary:hover{color:#c4c9d1}
+.drawer .body{padding:12px;display:flex;flex-direction:column;gap:11px}
+
+/* meters */
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.meterbox{padding:8px 10px}
+.meterbox .row{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:0.16em;margin-bottom:6px}
+.ledbar{position:relative;height:11px;border-radius:2px;background:#07090b;overflow:hidden;
+  box-shadow:inset 0 2px 4px rgba(0,0,0,0.9)}
+.ledbar i{position:absolute;top:1px;bottom:1px;border-radius:1px}
+.ledbar::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(90deg,transparent 0 5px,#0b0d10 5px 7px)}
+.readouts{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.ro .lbl2{font-size:9.5px;letter-spacing:0.16em;margin-bottom:4px}
+.ro .vfd{font-size:14px}
+#bands{width:100%;height:60px;display:block;background:#07090b;border-radius:3px;
+  box-shadow:inset 0 2px 5px rgba(0,0,0,0.9)}
+.bandslbl{display:flex;justify-content:space-between;font-size:9px;letter-spacing:0.12em;color:#6b717b;margin-top:4px}
+
+/* progress + status */
+#status{min-height:3em;width:100%;font-size:10.5px}
+#progress{height:4px;border-radius:2px;background:#080a08;overflow:hidden;width:100%;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,0.9)}
+#progress i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#c98a2e,var(--vfd));
+  box-shadow:0 0 6px rgba(255,191,94,0.7);transition:width .1s}
+
+.specs{font-size:9.5px;line-height:1.65;color:#7c828c}
+footer.plateline{display:flex;justify-content:space-between;padding:10px 8px 2px;font-size:9px;letter-spacing:0.14em}
+
+@media (max-width:900px){
+  .face{grid-template-columns:1fr}
+  .module.ctl{flex-direction:column}
+  #gonio{width:280px;height:280px}
+}
+@media (prefers-reduced-motion:reduce){#progress i,.drawer summary::before{transition:none}}
+</style>
+</head>
+<body>
+<div class="plate">
+  <div class="screw tl"></div><div class="screw tr"></div>
+  <div class="screw bl"></div><div class="screw br"></div>
+
+  <header class="brand">
+    <span class="name">MONO<b>LOCK</b></span>
+    <span class="sub engrave">SPECTRAL PHASE UNIFICATION · MAXIMIZER</span>
+    <span class="modesw">
+      <button id="modeStudio" class="hwbtn active">STUDIO</button><button id="modeLive" class="hwbtn">LIVE</button>
+    </span>
+    <span class="pwr engrave">PWR <span class="led amber"></span></span>
+  </header>
+
+  <div class="face">
+
+    <!-- SOURCE -->
+    <div class="module">
+      <h2 class="engrave">SOURCE</h2>
+      <div id="drop">DROP STEREO FILE<br>OR CLICK TO LOAD</div>
+      <input type="file" id="file" accept="audio/*" hidden>
+      <div id="srcinfo" class="vfd small"><span class="dim">no source loaded</span></div>
+      <h2 class="engrave" style="margin-top:6px">TEST SIGNALS</h2>
+      <button class="hwbtn" data-test="delay"><span class="bled"></span>delayed copy · 5 ms</button>
+      <button class="hwbtn" data-test="anti"><span class="bled"></span>anti-phase mono</button>
+      <button class="hwbtn" data-test="rotate"><span class="bled"></span>phase-rotated noise</button>
+      <button class="hwbtn" data-test="wide"><span class="bled"></span>panned + decorrelated</button>
+    </div>
+
+    <!-- SCOPE -->
+    <div class="module scopewrap">
+      <div class="tube">
+        <canvas id="gonio" width="380" height="380"></canvas>
+        <div class="glass"></div>
+        <div class="scopechip" id="scopelbl">ORIGINAL</div>
+      </div>
+      <div class="ledrow engrave">
+        <span><i class="led" id="ledTrack"></i>TRACK</span>
+        <span><i class="led" id="ledGL"></i>CONSIST</span>
+        <span><i class="led" id="ledVerify"></i>VERIFIED</span>
+        <span><i class="led" id="ledDual"></i>DUAL</span>
+      </div>
+      <div id="status" class="vfd small"><span class="dim">load a source or pick a test signal</span></div>
+      <div id="progress"><i></i></div>
+    </div>
+
+    <!-- PROCESS -->
+    <div class="module ctl">
+      <h2 class="engrave" style="text-align:center">PROCESS</h2>
+      <div class="knobwrap">
+        <canvas id="knob" width="170" height="170" tabindex="0" role="slider"
+          aria-label="Strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></canvas>
+        <div id="knobval" class="vfd">100%</div>
+        <div class="knoblbl engrave">STRENGTH</div>
+      </div>
+      <button id="play" class="hwbtn big" disabled>▶ PLAY</button>
+      <button id="ab" class="hwbtn" disabled><span class="bled"></span>monitor: original</button>
+      <button id="monobtn" class="hwbtn" disabled><span class="bled"></span>mono audition: off</button>
+      <button id="micbtn" class="hwbtn" disabled><span class="bled"></span>input: sample loop</button>
+      <button id="learnbtn" class="hwbtn" disabled><span class="bled"></span>estimators: learning</button>
+      <button id="winbtn" class="hwbtn" disabled><span class="bled"></span>live window: 512 · tight</button>
+      <button id="exportbtn" class="hwbtn" disabled><span class="bled"></span>export wav render</button>
+    </div>
+
+  </div>
+
+  <details class="drawer" id="meterdrawer">
+    <summary>METERING</summary>
+    <div class="body">
+      <div class="meters">
+        <div class="meterbox inset">
+          <div class="row engrave"><span>CORRELATION · PRE</span><span id="corrPreV" style="color:var(--pre)">—</span></div>
+          <div class="ledbar"><i id="corrPreBar" style="background:var(--pre)"></i></div>
+        </div>
+        <div class="meterbox inset">
+          <div class="row engrave"><span>CORRELATION · POST</span><span id="corrPostV" style="color:var(--post)">—</span></div>
+          <div class="ledbar"><i id="corrPostBar" style="background:var(--post)"></i></div>
+        </div>
+      </div>
+      <div class="readouts">
+        <div class="ro"><div class="lbl2 engrave">DETECTED LAG</div><div class="vfd" id="lagV">—</div></div>
+        <div class="ro"><div class="lbl2 engrave">MONO SUM GAIN</div><div class="vfd" id="gainV">—</div></div>
+      </div>
+      <div>
+        <canvas id="bands" width="640" height="60"></canvas>
+        <div class="bandslbl"><span>40 Hz</span><span>PER-BAND CORRELATION · PRE / POST</span><span>20 kHz</span></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="drawer">
+    <summary>ENGINE</summary>
+    <div class="body specs">
+ENGINE — stage 1: tracked GCC-PHAT broadband pre-alignment (windowed ±20 ms, time-varying cubic fractional delay, collapses to constant when stable) · stage 2: segmented two-pass spectral phase unification — pass 1 analyzes the whole file in 1 s segments (cross-spectra, minimum-statistics noise floor, per-band correlation); pass 2 rotates L/R by ∓Δ/2 toward the smoothed cross-spectrum phase, coherence-gated, SNR-adaptive, slew-limited on the shortest arc, steered by non-causal segment priors, seeded fully converged · stage 3: psychoacoustic Δφ→ILD width restoration (converted above ~700 Hz only).
+<br><br>
+DETAIL — √Hann window 2048/4096/8192 pt · 2× zero-padded FFT · hop = win/8 (87.5 % overlap) · main-lobe identity phase locking · 4-group multiband transient freeze · per-band auto-strength (mono-safe bands untouched, the knob is a ceiling) · VERIFY &amp; REFINE: per-band correlation checked against a strength-scaled target, failing coherent bands re-rendered with relaxed gates, locking off and faster slew (≤3 rounds, no-progress detection) · correlation-guarded single-iteration spectral-consistency pass · verification reports any band left destructive. Processing is offline per strength change; the plugin build runs the identical chain streaming.
+    </div>
+  </details>
+
+  <footer class="plateline engrave">
+    <span>MONOLOCK · WEB PROTOTYPE</span>
+    <span>ENGINE v0.4 · SN 000001</span>
+  </footer>
+</div>
+<script>
+"use strict";
+/* ============================ FFT ============================ */
+function makeFFT(n){
+  const levels=Math.round(Math.log2(n));
+  const cosT=new Float32Array(n/2),sinT=new Float32Array(n/2);
+  for(let i=0;i<n/2;i++){cosT[i]=Math.cos(2*Math.PI*i/n);sinT[i]=Math.sin(2*Math.PI*i/n);}
+  const rev=new Uint32Array(n);
+  for(let i=0;i<n;i++){let x=i,r=0;for(let j=0;j<levels;j++){r=(r<<1)|(x&1);x>>=1;}rev[i]=r;}
+  return function(re,im,inv){
+    for(let i=0;i<n;i++){const j=rev[i];if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}}
+    for(let size=2;size<=n;size<<=1){
+      const half=size>>1,step=n/size;
+      for(let i=0;i<n;i+=size)for(let j=i,k=0;j<i+half;j++,k+=step){
+        const c=cosT[k],s=inv?sinT[k]:-sinT[k];
+        const tr=re[j+half]*c-im[j+half]*s, ti=re[j+half]*s+im[j+half]*c;
+        re[j+half]=re[j]-tr; im[j+half]=im[j]-ti; re[j]+=tr; im[j]+=ti;
+      }
+    }
+    if(inv){for(let i=0;i<n;i++){re[i]/=n;im[i]/=n;}}
+  };
+}
+const wrapPi=a=>{a=(a+Math.PI)%(2*Math.PI);if(a<0)a+=2*Math.PI;return a-Math.PI;};
+const smoothstep=(a,b,x)=>{const t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t);};
+const nextPow2=x=>1<<Math.ceil(Math.log2(x));
+
+/* ========= Stage 1: GCC-PHAT (global + windowed lag track) ========= */
+function gccPhatSeg(L,R,off,len,sr){
+  const seg=Math.min(len,1<<17);
+  const N=nextPow2(seg)*2, fft=makeFFT(N);
+  const lr=new Float32Array(N),li=new Float32Array(N),rr=new Float32Array(N),ri=new Float32Array(N);
+  for(let i=0;i<seg;i++){const s=off+i; lr[i]=s<L.length?L[s]:0; rr[i]=s<R.length?R[s]:0;}
+  fft(lr,li,false); fft(rr,ri,false);
+  const cr=new Float32Array(N),ci=new Float32Array(N);
+  for(let k=0;k<N;k++){
+    const re=lr[k]*rr[k]+li[k]*ri[k], im=li[k]*rr[k]-lr[k]*ri[k]; // L * conj(R)
+    const m=Math.hypot(re,im)+1e-12;
+    cr[k]=re/m; ci[k]=im/m;
+  }
+  fft(cr,ci,true);
+  const maxLag=Math.min(Math.round(0.020*sr),N/2-2);
+  let best=0,bi=0;
+  for(let l=-maxLag;l<=maxLag;l++){
+    const idx=(l+N)%N, v=cr[idx];
+    if(v>best){best=v;bi=l;}
+  }
+  const c0=cr[(bi+N)%N],cm=cr[(bi-1+N)%N],cp=cr[(bi+1+N)%N];
+  const den=cm-2*c0+cp;
+  const frac=Math.abs(den)>1e-9?0.5*(cm-cp)/den:0;
+  return {lag:bi+(isFinite(frac)?Math.max(-0.5,Math.min(0.5,frac)):0),conf:best/seg*N};
+}
+function fracDelay(x,d){ // constant delay d>=0, cubic (Catmull-Rom)
+  const n=x.length,out=new Float32Array(n);
+  const di=Math.floor(d),df=d-di;
+  for(let i=0;i<n;i++){
+    const p=i-di-1;
+    const xm1=p-1>=0&&p-1<n?x[p-1]:0, x0=p>=0&&p<n?x[p]:0,
+          x1=p+1>=0&&p+1<n?x[p+1]:0, x2=p+2>=0&&p+2<n?x[p+2]:0;
+    const tt=1-df;
+    const a=(-xm1+3*x0-3*x1+x2)*0.5, b=xm1-2.5*x0+2*x1-0.5*x2, c=(x1-xm1)*0.5;
+    out[i]=((a*tt+b)*tt+c)*tt+x0;
+  }
+  return out;
+}
+function varDelay(x,dArr){ // time-varying delay dArr[i]>=0, cubic
+  const n=x.length,out=new Float32Array(n);
+  for(let i=0;i<n;i++){
+    const d=dArr[i], di=Math.floor(d), df=d-di, p=i-di-1;
+    const xm1=p-1>=0&&p-1<n?x[p-1]:0, x0=p>=0&&p<n?x[p]:0,
+          x1=p+1>=0&&p+1<n?x[p+1]:0, x2=p+2>=0&&p+2<n?x[p+2]:0;
+    const tt=1-df;
+    const a=(-xm1+3*x0-3*x1+x2)*0.5, b=xm1-2.5*x0+2*x1-0.5*x2, c=(x1-xm1)*0.5;
+    out[i]=((a*tt+b)*tt+c)*tt+x0;
+  }
+  return out;
+}
+function alignChannels(L,R,sr){ // windowed GCC-PHAT track; collapses to constant when stable
+  const n=L.length, winS=Math.round(0.5*sr), hopS=Math.round(0.25*sr);
+  const constant=g=>{
+    if(Math.abs(g)<0.05)return{l:L,r:R,lag:0,lagRange:0};
+    return {l:g<0?fracDelay(L,-g):L, r:g>0?fracDelay(R,g):R, lag:g, lagRange:0};
+  };
+  if(n<winS*2){
+    const g=gccPhatSeg(L,R,0,n,sr);
+    return constant(g.conf>0.3?g.lag:0);
+  }
+  const pts=[];
+  for(let off=0;off+winS<=n;off+=hopS){
+    const g=gccPhatSeg(L,R,off,winS,sr);
+    pts.push({t:off+winS/2,lag:g.lag,conf:g.conf});
+  }
+  if(!pts.some(p=>p.conf>=0.25))return {l:L,r:R,lag:0,lagRange:0};
+  let firstGood=pts.find(p=>p.conf>=0.25).lag, lastGood=firstGood;
+  for(const p of pts){ if(p.conf>=0.25)lastGood=p.lag; else p.lag=lastGood; }
+  for(const p of pts){ if(p.conf>=0.25)break; p.lag=firstGood; }
+  for(let i=0;i<pts.length;i++){ // 3-point median against outliers
+    const a=pts[Math.max(0,i-1)].lag,b=pts[i].lag,c=pts[Math.min(pts.length-1,i+1)].lag;
+    pts[i].m=[a,b,c].sort((x,y)=>x-y)[1];
+  }
+  for(const p of pts)p.lag=p.m;
+  const lags=pts.map(p=>p.lag);
+  const lagMin=Math.min(...lags),lagMax=Math.max(...lags);
+  const mean=lags.reduce((a,b)=>a+b,0)/lags.length;
+  if(lagMax-lagMin<1.0)return constant(mean); // stable track: constant path preserves null behavior
+  const lagT=new Float32Array(n); let pi=0;
+  for(let i=0;i<n;i++){
+    while(pi<pts.length-2&&i>pts[pi+1].t)pi++;
+    const p0=pts[pi],p1=pts[Math.min(pts.length-1,pi+1)];
+    const t1=Math.max(p0.t+1,p1.t);
+    const w=Math.min(1,Math.max(0,(i-p0.t)/(t1-p0.t)));
+    lagT[i]=p0.lag+(p1.lag-p0.lag)*w;
+  }
+  const dL=new Float32Array(n),dR=new Float32Array(n);
+  for(let i=0;i<n;i++){const g=lagT[i]; if(g<0)dL[i]=-g; else dR[i]=g;}
+  return {l:varDelay(L,dL), r:varDelay(R,dR), lag:mean, lagRange:lagMax-lagMin};
+}
+
+/* == Stage 2+3: segmented two-pass unification + verify/refine + consistency == */
+const NBANDS=24;
+const winSizeFor=sr=>sr<=50000?2048:(sr<=100000?4096:8192);
+const aWeight=f=>{ // A-weighting amplitude approx, normalized ~1 @ 1 kHz
+  const f2=f*f;
+  const ra=(12194*12194*f2*f2)/((f2+20.6*20.6)*Math.sqrt((f2+107.7*107.7)*(f2+737.9*737.9))*(f2+12194*12194));
+  return ra/0.794;
+};
+async function processAll(L,R,sr,strength,progress){
+  // ---- stage 1: tracked broadband pre-alignment
+  const al=alignChannels(L,R,sr);
+  const l=al.l, r=al.r, appliedLag=al.lag, lagRange=al.lagRange;
+  // ---- geometry
+  const W=winSizeFor(sr), NFFT=2*W, H=NFFT/2, HOP1=W/4, HOP2=W/8;
+  const n=l.length, fft=makeFFT(NFFT);
+  const win=new Float32Array(W);
+  for(let i=0;i<W;i++)win[i]=Math.sqrt(0.5*(1-Math.cos(2*Math.PI*i/W)));
+  const lre=new Float32Array(NFFT),lim=new Float32Array(NFFT),
+        rre=new Float32Array(NFFT),rim=new Float32Array(NFFT);
+  const yre=new Float32Array(NFFT),yim=new Float32Array(NFFT),
+        zre=new Float32Array(NFFT),zim=new Float32Array(NFFT); // consistency-pass buffers
+  const loadInto=(a,b,are,aim,bre,bim,off)=>{
+    for(let i=0;i<W;i++){
+      const s=off+i;
+      are[i]=(s<n?a[s]:0)*win[i]; bre[i]=(s<n?b[s]:0)*win[i];
+    }
+    are.fill(0,W); bre.fill(0,W); aim.fill(0); bim.fill(0);
+    fft(are,aim,false); fft(bre,bim,false);
+  };
+  const loadFrame=off=>loadInto(l,r,lre,lim,rre,rim,off);
+  const bLo=new Float32Array(NBANDS);
+  for(let b=0;b<NBANDS;b++)bLo[b]=40*Math.pow(20000/40,b/NBANDS);
+  const binBand=new Int8Array(H+1), gOf=new Int8Array(H+1), wR=new Float32Array(H+1);
+  for(let k=0;k<=H;k++){
+    const f=k*sr/NFFT;let b=-1;
+    for(let j=NBANDS-1;j>=0;j--)if(f>=bLo[j]){b=j;break;}
+    binBand[k]=f>20000?-1:b;
+    gOf[k]=f<200?0:(f<1200?1:(f<5000?2:3)); // multiband transient groups
+    wR[k]=0.5*smoothstep(200,700,f);        // psychoacoustic width: ILD conversion above ~700 Hz
+  }
+
+  /* -------- PASS 1: onset-aligned segmented whole-file analysis -------- */
+  const mSamp=Math.max(Math.round(0.25*sr),HOP1*2);
+  const NMIC=Math.max(1,Math.min(128,Math.ceil(n/mSamp)));
+  const McRe=new Float64Array(NMIC*(H+1)),McIm=new Float64Array(NMIC*(H+1)),
+        McLL=new Float64Array(NMIC*(H+1)),McRR=new Float64Array(NMIC*(H+1)),
+        micCnt=new Float64Array(NMIC);
+  const floorP=new Float64Array(H+1).fill(Infinity),fastP=new Float64Array(H+1);
+  const a1=1-Math.exp(-HOP1/(0.050*sr));
+  const F1=Math.max(1,Math.ceil(n/HOP1));
+  for(let f=0;f<F1;f++){
+    const off=f*HOP1;
+    loadFrame(off);
+    const s=Math.min(NMIC-1,Math.floor(off/mSamp)), base=s*(H+1);
+    micCnt[s]++;
+    for(let k=1;k<H;k++){
+      const aL2=lre[k]*lre[k]+lim[k]*lim[k], aR2=rre[k]*rre[k]+rim[k]*rim[k];
+      McRe[base+k]+=lre[k]*rre[k]+lim[k]*rim[k];
+      McIm[base+k]+=lim[k]*rre[k]-lre[k]*rim[k];
+      McLL[base+k]+=aL2; McRR[base+k]+=aR2;
+      const p=aL2+aR2;
+      fastP[k]= f===0 ? p : fastP[k]+a1*(p-fastP[k]);
+      if(f>=2&&fastP[k]<floorP[k])floorP[k]=fastP[k];
+    }
+    if((f&31)===0){progress(0.22*f/F1);await new Promise(q=>setTimeout(q));}
+  }
+  // per-micro-block band signatures (complex cross-spectrum phasors per band)
+  const sigRe=new Float64Array(NMIC*NBANDS),sigIm=new Float64Array(NMIC*NBANDS);
+  for(let s=0;s<NMIC;s++){const base=s*(H+1);
+    for(let k=1;k<H;k++){const b=binBand[k];if(b<0)continue;
+      sigRe[s*NBANDS+b]+=McRe[base+k];sigIm[s*NBANDS+b]+=McIm[base+k];}
+  }
+  // onset-aligned merge: open a new segment where the phase-relationship signature jumps
+  const segStartMic=[0];
+  {
+    const runRe=new Float64Array(NBANDS),runIm=new Float64Array(NBANDS);
+    const addRun=s=>{for(let b=0;b<NBANDS;b++){runRe[b]+=sigRe[s*NBANDS+b];runIm[b]+=sigIm[s*NBANDS+b];}};
+    const dist=s=>{
+      let num=0,den=0;
+      for(let b=0;b<NBANDS;b++){
+        const wa=Math.hypot(sigRe[s*NBANDS+b],sigIm[s*NBANDS+b]);
+        const wr=Math.hypot(runRe[b],runIm[b]);
+        const w=Math.min(wa,wr); if(w<=0)continue;
+        num+=w*(sigRe[s*NBANDS+b]*runRe[b]+sigIm[s*NBANDS+b]*runIm[b])/(wa*wr);
+        den+=w;
+      }
+      return den>0?1-num/den:0;
+    };
+    addRun(0);
+    for(let s=1;s<NMIC;s++){
+      if(dist(s)>0.45&&segStartMic.length<32){
+        segStartMic.push(s);
+        runRe.fill(0);runIm.fill(0);
+      }
+      addRun(s);
+    }
+  }
+  const NSEG=segStartMic.length;
+  const SgRe=new Float64Array(NSEG*(H+1)),SgIm=new Float64Array(NSEG*(H+1)),
+        SgLL=new Float64Array(NSEG*(H+1)),SgRR=new Float64Array(NSEG*(H+1)),
+        segCnt=new Float64Array(NSEG),segCenter=new Float64Array(NSEG);
+  for(let s=0;s<NSEG;s++){
+    const m0=segStartMic[s], m1=(s+1<NSEG?segStartMic[s+1]:NMIC);
+    for(let m=m0;m<m1;m++){
+      const bs=m*(H+1),bd=s*(H+1);
+      for(let k=1;k<H;k++){SgRe[bd+k]+=McRe[bs+k];SgIm[bd+k]+=McIm[bs+k];SgLL[bd+k]+=McLL[bs+k];SgRR[bd+k]+=McRR[bs+k];}
+      segCnt[s]+=micCnt[m];
+    }
+    segCenter[s]=((m0+m1)/2)*mSamp;
+  }
+  const segStartSamp=segStartMic.map(m=>m*mSamp);
+  // Delta(f) coherence-anchored interpolation: frequency-smooth each segment's complex
+  // cross-spectrum (|S_LR| ~ coherence*energy, so complex blur = anchor-weighted circular smoothing)
+  {
+    const tmp=new Float64Array(H+1);
+    const blur=(arr,base)=>{
+      for(let pass=0;pass<3;pass++){
+        for(let k=1;k<H;k++){
+          let s2=0,c2=0;
+          for(let j=Math.max(1,k-3);j<=Math.min(H-1,k+3);j++){s2+=arr[base+j];c2++;}
+          tmp[k]=s2/c2;
+        }
+        for(let k=1;k<H;k++)arr[base+k]=tmp[k];
+      }
+    };
+    for(let s=0;s<NSEG;s++){blur(SgRe,s*(H+1));blur(SgIm,s*(H+1));}
+  }
+  // global sums from segments
+  const A_Re=new Float64Array(H+1),A_Im=new Float64Array(H+1),
+        A_LL=new Float64Array(H+1),A_RR=new Float64Array(H+1);
+  for(let s=0;s<NSEG;s++){const base=s*(H+1);
+    for(let k=1;k<H;k++){A_Re[k]+=SgRe[base+k];A_Im[k]+=SgIm[base+k];A_LL[k]+=SgLL[base+k];A_RR[k]+=SgRR[base+k];}
+  }
+  const C1=new Float32Array(H+1),D0=new Float32Array(H+1);
+  for(let k=1;k<H;k++){
+    C1[k]=(A_Re[k]*A_Re[k]+A_Im[k]*A_Im[k])/(A_LL[k]*A_RR[k]+1e-24);
+    D0[k]=Math.atan2(A_Im[k],A_Re[k]);
+    if(!isFinite(floorP[k]))floorP[k]=0;
+  }
+  const bandPre=new Float32Array(NBANDS),bandEnergy=new Float64Array(NBANDS),bandCoh=new Float32Array(NBANDS);
+  {
+    const bRe=new Float64Array(NBANDS),bLL=new Float64Array(NBANDS),bRR=new Float64Array(NBANDS),bCE=new Float64Array(NBANDS),bE=new Float64Array(NBANDS);
+    for(let k=1;k<H;k++){
+      const b=binBand[k];if(b<0)continue;
+      bRe[b]+=A_Re[k];bLL[b]+=A_LL[k];bRR[b]+=A_RR[k];
+      const wa=aWeight(k*sr/NFFT), e=(A_LL[k]+A_RR[k]);
+      bE[b]+=e; bandEnergy[b]+=e*wa*wa; bCE[b]+=C1[k]*e;
+    }
+    for(let b=0;b<NBANDS;b++){
+      bandPre[b]=bLL[b]>1e-9?bRe[b]/Math.sqrt(bLL[b]*bRR[b]+1e-24):0;
+      bandCoh[b]=bE[b]>0?bCE[b]/bE[b]:0;
+    }
+  }
+  const autoS=new Float32Array(NBANDS),
+        gLoB=new Float32Array(NBANDS).fill(0.25),
+        gHiB=new Float32Array(NBANDS).fill(0.6),
+        lockB=new Uint8Array(NBANDS).fill(1),
+        slewMulB=new Float32Array(NBANDS).fill(1),
+        T=new Float32Array(NBANDS);
+  let maxE=0;
+  for(let b=0;b<NBANDS;b++){
+    autoS[b]=1-smoothstep(0.90,0.98,bandPre[b]);
+    T[b]=Math.min(0.95,bandPre[b]+(0.95-bandPre[b])*strength);
+    if(bandEnergy[b]>maxE)maxE=bandEnergy[b];
+  }
+  const fixable=b=>bandEnergy[b]>maxE*1e-6&&bandCoh[b]>=0.35;
+
+  /* -------- PASS 2: render (segment-prior steered; callable per round) -------- */
+  const Sll=new Float32Array(H+1),Srr=new Float32Array(H+1),
+        SlrRe=new Float32Array(H+1),SlrIm=new Float32Array(H+1),
+        Dc=new Float32Array(H+1),gatea=new Float32Array(H+1),
+        aLa=new Float32Array(H+1),aRa=new Float32Array(H+1),
+        phLa=new Float32Array(H+1),phRa=new Float32Array(H+1),
+        cmag=new Float32Array(H+1),prevMag=new Float32Array(H+1),
+        peakOf=new Int32Array(H+1),rotComputed=new Uint8Array(H+1),
+        rotLb=new Float32Array(H+1),rotRb=new Float32Array(H+1),
+        prevRotL=new Float32Array(H+1),prevRotR=new Float32Array(H+1);
+  const alpha=1-Math.exp(-HOP2/(0.080*sr));
+  const maxSlew=Math.PI*(HOP2/sr)/0.020;
+  const slew=(prev,x,lim)=>wrapPi(prev+Math.max(-lim,Math.min(lim,wrapPi(x-prev))));
+  const NG=4, fluxLen=Math.max(4,Math.round(0.200*sr/HOP2));
+  const fluxBuf=new Float32Array(NG*fluxLen);
+  const outL=new Float32Array(n+NFFT),outR=new Float32Array(n+NFFT);
+  const acc={postRe:new Float64Array(NBANDS),postLL:new Float64Array(NBANDS),postRR:new Float64Array(NBANDS)};
+  const frames=Math.max(1,Math.ceil(n/HOP2)), W_P=0.35;
+  const segMean=(s,k)=>{const c=segCnt[s]||1,b=s*(H+1)+k;
+    return [SgRe[b]/c,SgIm[b]/c,SgLL[b]/c,SgRR[b]/c];};
+
+  async function renderPass2(ySrc){ // ySrc: consistency mode — target mags from processing, phases from ySrc
+    outL.fill(0);outR.fill(0);prevMag.fill(0);fluxBuf.fill(0);
+    acc.postRe.fill(0);acc.postLL.fill(0);acc.postRR.fill(0);
+    const fluxIdx=new Int32Array(NG),fluxFill=new Int32Array(NG),transientG=new Uint8Array(NG);
+    let transientCount=0, rotMag=0, totMag=0, glErr=0, glNorm=0;
+    { // seed fully converged from segment 0
+      for(let k=1;k<H;k++){
+        const m=segMean(0,k);
+        SlrRe[k]=m[0];SlrIm[k]=m[1];Sll[k]=m[2];Srr[k]=m[3];
+        Dc[k]=Math.atan2(SlrIm[k],SlrRe[k]);
+        const b=binBand[k];
+        const C=(SlrRe[k]*SlrRe[k]+SlrIm[k]*SlrIm[k])/(Sll[k]*Srr[k]+1e-18);
+        gatea[k]=smoothstep(b>=0?gLoB[b]:0.25,b>=0?gHiB[b]:0.6,C);
+        const amt0=gatea[k]*strength*(b>=0?autoS[b]:1);
+        prevRotL[k]=-0.5*Dc[k]*amt0; prevRotR[k]=0.5*Dc[k]*amt0;
+      }
+    }
+    for(let f=0;f<frames;f++){
+      const off=f*HOP2;
+      loadFrame(off);
+      // segment prior: crossfade only within +-0.25 s of the detected boundary
+      const pos=off+W/2, XW=Math.round(0.25*sr);
+      let sc=0; while(sc<NSEG-1&&pos>=segStartSamp[sc+1])sc++;
+      let s0=sc,s1=sc,ws=0;
+      if(sc<NSEG-1&&segStartSamp[sc+1]-pos<XW){s1=sc+1;ws=0.5*(1-(segStartSamp[sc+1]-pos)/XW);}
+      else if(sc>0&&pos-segStartSamp[sc]<XW){s0=sc-1;s1=sc;ws=0.5*(1+(pos-segStartSamp[sc])/XW);}
+      ws=Math.min(1,Math.max(0,ws));
+      const b0=s0*(H+1),b1=s1*(H+1),c0=segCnt[s0]||1,c1=segCnt[s1]||1;
+      // pass A
+      const gFlux=[0,0,0,0];
+      for(let k=1;k<H;k++){
+        const Lr=lre[k],Li=lim[k],Rr=rre[k],Ri=rim[k];
+        const aL2=Lr*Lr+Li*Li, aR2=Rr*Rr+Ri*Ri, p=aL2+aR2;
+        const u=smoothstep(2,8,p/(floorP[k]+1e-24));
+        const ae=alpha*u;
+        Sll[k]+=ae*(aL2-Sll[k]); Srr[k]+=ae*(aR2-Srr[k]);
+        SlrRe[k]+=ae*((Lr*Rr+Li*Ri)-SlrRe[k]); SlrIm[k]+=ae*((Li*Rr-Lr*Ri)-SlrIm[k]);
+        // blend segmented prior (non-causal) into steering estimates
+        const pRe=(SgRe[b0+k]/c0)*(1-ws)+(SgRe[b1+k]/c1)*ws;
+        const pIm=(SgIm[b0+k]/c0)*(1-ws)+(SgIm[b1+k]/c1)*ws;
+        const pLL=(SgLL[b0+k]/c0)*(1-ws)+(SgLL[b1+k]/c1)*ws;
+        const pRR=(SgRR[b0+k]/c0)*(1-ws)+(SgRR[b1+k]/c1)*ws;
+        const eRe=SlrRe[k]*(1-W_P)+pRe*W_P, eIm=SlrIm[k]*(1-W_P)+pIm*W_P;
+        const eLL=Sll[k]*(1-W_P)+pLL*W_P, eRR=Srr[k]*(1-W_P)+pRR*W_P;
+        const C=(eRe*eRe+eIm*eIm)/(eLL*eRR+1e-18);
+        const b=binBand[k];
+        gatea[k]=smoothstep(b>=0?gLoB[b]:0.25,b>=0?gHiB[b]:0.6,C);
+        if(u>0||W_P>0)Dc[k]+=wrapPi(Math.atan2(eIm,eRe)-Dc[k]);
+        aLa[k]=Math.sqrt(aL2); aRa[k]=Math.sqrt(aR2);
+        phLa[k]=Math.atan2(Li,Lr); phRa[k]=Math.atan2(Ri,Rr);
+        const m=aLa[k]+aRa[k];
+        gFlux[gOf[k]]+=Math.max(0,m-prevMag[k]); prevMag[k]=m; cmag[k]=m;
+      }
+      // multiband transient decision
+      for(let g=0;g<NG;g++){
+        let tr=false;
+        if(fluxFill[g]>=4){
+          const seg=Array.prototype.slice.call(fluxBuf,g*fluxLen,g*fluxLen+fluxFill[g]).sort((a,b)=>a-b);
+          const med=seg[seg.length>>1];
+          tr=med>0&&gFlux[g]>2*med;
+        }
+        fluxBuf[g*fluxLen+fluxIdx[g]]=gFlux[g];
+        fluxIdx[g]=(fluxIdx[g]+1)%fluxLen; fluxFill[g]=Math.min(fluxFill[g]+1,fluxLen);
+        transientG[g]=tr?1:0;
+      }
+      if(transientG[0]||transientG[1]||transientG[2]||transientG[3])transientCount++;
+      // peaks + main-lobe regions
+      peakOf.fill(-1); rotComputed.fill(0);
+      let lastPeak=-1,regionStart=1;
+      for(let k=3;k<H-2;k++){
+        const m=cmag[k];
+        if(m>1e-6&&m>cmag[k-1]&&m>=cmag[k+1]&&m>cmag[k-2]&&m>=cmag[k+2]){
+          if(lastPeak>=0){
+            const mid=(lastPeak+k)>>1;
+            for(let j=regionStart;j<=mid;j++)peakOf[j]=lastPeak;
+            regionStart=mid+1;
+          }
+          lastPeak=k;
+        }
+      }
+      if(lastPeak>=0)for(let j=regionStart;j<H;j++)peakOf[j]=lastPeak;
+      const computeRot=k=>{
+        rotComputed[k]=1;
+        const b=binBand[k];
+        const amt=gatea[k]*strength*(b>=0?autoS[b]:1);
+        if(aLa[k]+aRa[k]<1e-9){
+          // silence: hold
+        }else if(amt<=1e-4){
+          prevRotL[k]*=(1-alpha); prevRotR[k]*=(1-alpha);
+        }else if(!transientG[gOf[k]]){
+          const lim=maxSlew*(b>=0?slewMulB[b]:1);
+          prevRotL[k]=slew(prevRotL[k],-0.5*Dc[k]*amt,lim);
+          prevRotR[k]=slew(prevRotR[k], 0.5*Dc[k]*amt,lim);
+        }
+        rotLb[k]=prevRotL[k]; rotRb[k]=prevRotR[k];
+      };
+      // pass B
+      for(let k=1;k<H;k++){
+        const pk=peakOf[k]; const bb=binBand[k];
+        const p=(pk>=0&&Math.abs(k-pk)<=4&&(bb<0||lockB[bb]))?pk:k;
+        if(!rotComputed[p])computeRot(p);
+        const rl=rotLb[p], rr2=rotRb[p];
+        if(p!==k){prevRotL[k]=rl;prevRotR[k]=rr2;}
+        const amtK=gatea[k]*strength*(bb>=0?autoS[bb]:1);
+        let Lr=lre[k],Li=lim[k],Rr=rre[k],Ri=rim[k];
+        const aL=aLa[k],aR=aRa[k];
+        totMag+=aL+aR;
+        if(Math.abs(rl)>1e-7||Math.abs(rr2)>1e-7||amtK>1e-4){
+          if(Math.abs(rl)+Math.abs(rr2)>0.3)rotMag+=aL+aR;
+          const g=1+wR[k]*Math.sin(Math.min(Math.abs(Dc[k]),Math.PI/2))*amtK; // psychoacoustic width map
+          let gL,gR;
+          if(aL>=aR){gL=Math.sqrt(g);gR=1/Math.sqrt(g);}else{gL=1/Math.sqrt(g);gR=Math.sqrt(g);}
+          const e0=aL*aL+aR*aR, e1=aL*aL*gL*gL+aR*aR*gR*gR;
+          const norm=e1>1e-18?Math.sqrt(e0/e1):1;
+          gL*=norm; gR*=norm;
+          const nphL=phLa[k]+rl, nphR=phRa[k]+rr2;
+          Lr=aL*gL*Math.cos(nphL); Li=aL*gL*Math.sin(nphL);
+          Rr=aR*gR*Math.cos(nphR); Ri=aR*gR*Math.sin(nphR);
+          lre[k]=Lr;lim[k]=Li;rre[k]=Rr;rim[k]=Ri;
+          lre[NFFT-k]=Lr;lim[NFFT-k]=-Li;rre[NFFT-k]=Rr;rim[NFFT-k]=-Ri;
+        }
+        if(bb>=0){
+          acc.postRe[bb]+=Lr*Rr+Li*Ri;
+          acc.postLL[bb]+=Lr*Lr+Li*Li; acc.postRR[bb]+=Rr*Rr+Ri*Ri;
+        }
+      }
+      for(const k of [0,H]){
+        const s=lre[k]+rre[k], sM=s!==0?Math.sign(s):(lre[k]!==0?Math.sign(lre[k]):1);
+        lre[k]+=strength*(sM*Math.abs(lre[k])-lre[k]);
+        rre[k]+=strength*(sM*Math.abs(rre[k])-rre[k]);
+      }
+      if(ySrc){ // consistency: target magnitudes from processing, phases re-analyzed from current output
+        loadInto(ySrc.oL,ySrc.oR,yre,yim,zre,zim,off);
+        for(let k=1;k<H;k++){
+          const mL=Math.hypot(lre[k],lim[k]), mR=Math.hypot(rre[k],rim[k]);
+          const yL=Math.hypot(yre[k],yim[k]), yR=Math.hypot(zre[k],zim[k]);
+          glErr+=(yL-mL)*(yL-mL)+(yR-mR)*(yR-mR); glNorm+=mL*mL+mR*mR;
+          const pL=Math.atan2(yim[k],yre[k]), pR=Math.atan2(zim[k],zre[k]);
+          const Lr=mL*Math.cos(pL),Li=mL*Math.sin(pL),Rr=mR*Math.cos(pR),Ri=mR*Math.sin(pR);
+          lre[k]=Lr;lim[k]=Li;rre[k]=Rr;rim[k]=Ri;
+          lre[NFFT-k]=Lr;lim[NFFT-k]=-Li;rre[NFFT-k]=Rr;rim[NFFT-k]=-Ri;
+        }
+        for(const k of [0,H]){
+          lre[k]=Math.sign(yre[k]||1)*Math.abs(lre[k]);
+          rre[k]=Math.sign(zre[k]||1)*Math.abs(rre[k]);
+        }
+      }
+      lim[0]=0;lim[H]=0;rim[0]=0;rim[H]=0;
+      fft(lre,lim,true); fft(rre,rim,true);
+      for(let i=0;i<W;i++){
+        outL[off+i]+=lre[i]*win[i]; outR[off+i]+=rre[i]*win[i];
+      }
+      if((f&31)===0){progress(0.25+0.75*f/frames);await new Promise(q=>setTimeout(q));}
+    }
+    const oL=new Float32Array(n),oR=new Float32Array(n);
+    for(let i=0;i<n;i++){oL[i]=outL[i]/4;oR[i]=outR[i]/4;}
+    const bandPost=new Float32Array(NBANDS);
+    for(let b=0;b<NBANDS;b++)
+      bandPost[b]=acc.postLL[b]>1e-9?acc.postRe[b]/Math.sqrt(acc.postLL[b]*acc.postRR[b]+1e-24):0;
+    return {oL,oR,bandPost,transientCount,rotFrac:totMag>0?rotMag/totMag:0,
+            glInc:glNorm>0?Math.sqrt(glErr/glNorm):0};
+  }
+
+  async function measureBands(a,b){ // analysis-only sweep on any pair: honest final verdict
+    const mRe=new Float64Array(NBANDS),mLL=new Float64Array(NBANDS),mRR=new Float64Array(NBANDS);
+    for(let f=0;f<F1;f++){
+      loadInto(a,b,lre,lim,rre,rim,f*HOP1);
+      for(let k=1;k<H;k++){
+        const bb=binBand[k];if(bb<0)continue;
+        mRe[bb]+=lre[k]*rre[k]+lim[k]*rim[k];
+        mLL[bb]+=lre[k]*lre[k]+lim[k]*lim[k];
+        mRR[bb]+=rre[k]*rre[k]+rim[k]*rim[k];
+      }
+      if((f&63)===0)await new Promise(q=>setTimeout(q));
+    }
+    const bp=new Float32Array(NBANDS);
+    for(let bb=0;bb<NBANDS;bb++)bp[bb]=mLL[bb]>1e-9?mRe[bb]/Math.sqrt(mLL[bb]*mRR[bb]+1e-24):0;
+    return bp;
+  }
+
+  /* -------- PASS 3: verify & refine -------- */
+  const MAXR=3;
+  const prevPost=new Float32Array(NBANDS).fill(-2), unfix=new Uint8Array(NBANDS);
+  const roundLog=[];
+  let out,rounds=1;
+  for(let round=0;round<MAXR;round++){
+    out=await renderPass2(null);
+    {
+      let s=0,c=0;
+      for(let b=0;b<NBANDS;b++)if(fixable(b)){s+=out.bandPost[b];c++;}
+      roundLog.push(c?+(s/c).toFixed(3):1);
+    }
+    let anyFail=false;
+    for(let b=0;b<NBANDS;b++){
+      if(fixable(b)&&!unfix[b]&&out.bandPost[b]<T[b]-0.02){
+        if(round>0&&out.bandPost[b]-prevPost[b]<0.01){
+          unfix[b]=1;
+        }else{
+          anyFail=true;
+          autoS[b]=1;
+          gLoB[b]=Math.max(0.05,gLoB[b]*0.5);
+          gHiB[b]=Math.max(gLoB[b]+0.05,gHiB[b]*0.6);
+          lockB[b]=0;
+          slewMulB[b]=Math.min(8,slewMulB[b]*4);
+        }
+      }
+      prevPost[b]=out.bandPost[b];
+    }
+    if(!anyFail||round===MAXR-1)break;
+    rounds++;
+  }
+  const corr=(a,b)=>{let s=0,sa=0,sb=0;for(let i=0;i<a.length;i++){s+=a[i]*b[i];sa+=a[i]*a[i];sb+=b[i]*b[i];}
+    return sa>1e-12&&sb>1e-12?s/Math.sqrt(sa*sb):0;};
+  /* -------- consistency pass (Griffin-Lim style, single iteration) -------- */
+  // Fires only on heavily rotated renders; adopted only if it costs no mono compatibility.
+  let glApplied=false, glInc=0;
+  if(out.rotFrac>0.02){
+    const glOut=await renderPass2(out);
+    glInc=glOut.glInc;
+    if(glInc>1e-3&&corr(glOut.oL,glOut.oR)>=corr(out.oL,out.oR)-0.01){
+      out={...glOut, rotFrac:out.rotFrac}; glApplied=true;
+    }
+  }
+  /* -------- dual-resolution: short-window causal engine supplies the HF -------- */
+  let dualRes=false;
+  if(out.rotFrac>0.02&&n<=(1<<21)){
+    const coreS=new LiveCore(sr); coreS.strength=strength;
+    const runS=cap=>{
+      const HP=coreS.hop,lat=coreS.W-coreS.hop;
+      const sL=cap?new Float32Array(n):null,sRc=cap?new Float32Array(n):null;
+      const tL=new Float32Array(HP),tR=new Float32Array(HP),oLh=new Float32Array(HP),oRh=new Float32Array(HP);
+      for(let off=0;off<n;off+=HP){
+        for(let i2=0;i2<HP;i2++){const s=off+i2;tL[i2]=s<n?l[s]:0;tR[i2]=s<n?r[s]:0;}
+        coreS.processBlock(tL,tR,oLh,oRh,HP);
+        if(cap)for(let i2=0;i2<HP;i2++){const d=off+i2-lat;if(d>=0&&d<n){sL[d]=oLh[i2];sRc[d]=oRh[i2];}}
+      }
+      return cap?{sL,sR:sRc}:null;
+    };
+    runS(false); // warm the causal estimators over the whole file
+    coreS.resetStreams();
+    const sOut=runS(true);
+    // zero-phase complementary crossover: LF from the long-window render, HF from the short engine
+    const N2=nextPow2(n+coreS.W), xf=makeFFT(N2);
+    const combine=(mainCh,shortCh)=>{
+      const mr=new Float32Array(N2),mi=new Float32Array(N2),qr=new Float32Array(N2),qi=new Float32Array(N2);
+      mr.set(mainCh);qr.set(shortCh);
+      xf(mr,mi,false);xf(qr,qi,false);
+      for(let k=0;k<N2;k++){
+        const f=(k<=N2/2?k:N2-k)*sr/N2;
+        const m=smoothstep(1800,3500,f);
+        mr[k]=mr[k]*(1-m)+qr[k]*m;
+        mi[k]=mi[k]*(1-m)+qi[k]*m;
+      }
+      xf(mr,mi,true);
+      const o2=new Float32Array(n);o2.set(mr.subarray(0,n));return o2;
+    };
+    const cL=combine(out.oL,sOut.sL), cR=combine(out.oR,sOut.sR);
+    if(corr(cL,cR)>=corr(out.oL,out.oR)-0.01){ // adoption-guarded, like the consistency pass
+      out={...out,oL:cL,oR:cR}; dualRes=true;
+    }
+  }
+  // final verification measured on the ACTUAL output (post-GL, post-dual-res)
+  const bandFinal=await measureBands(out.oL,out.oR);
+  let residual=0;
+  for(let b=0;b<NBANDS;b++)
+    if(bandEnergy[b]>maxE*1e-6&&bandFinal[b]<-0.1)residual++;
+  const monoRms=(a,b)=>{let s=0;for(let i=0;i<a.length;i++){const m=0.5*(a[i]+b[i]);s+=m*m;}return Math.sqrt(s/a.length);};
+  const preRms=monoRms(L,R), postRms=monoRms(out.oL,out.oR);
+  progress(1);
+  return {oL:out.oL,oR:out.oR,lag:appliedLag,lagRange,corrPre:corr(L,R),corrPost:corr(out.oL,out.oR),
+          gainDb:preRms>1e-9?20*Math.log10(postRms/preRms):(postRms>1e-9?60:0),
+          nfft:NFFT,win:W,segments:NSEG,transientFrames:out.transientCount,totalFrames:frames,
+          rounds,residual,roundLog,glApplied,glInc,dualRes,bandPre,bandPost:bandFinal};
+}
+
+/* ======================= test signals ======================= */
+function pink(n,seed){let b0=0,b1=0,b2=0,s=seed||1;const rnd=()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296*2-1;};
+  const o=new Float32Array(n);
+  for(let i=0;i<n;i++){const w=rnd();b0=0.997*b0+0.03*w;b1=0.985*b1+0.032*w;b2=0.95*b2+0.05*w;o[i]=(b0+b1+b2+w*0.02)*2.5;}
+  return o;}
+function drums(n,sr,seed){const o=pink(n,seed);const env=new Float32Array(n);
+  const hitI=Math.round(sr*0.33);
+  for(let h=0;h<n;h+=hitI)for(let i=h;i<Math.min(n,h+sr*0.25);i++)env[i]=Math.max(env[i],Math.exp(-(i-h)/(sr*0.05)));
+  for(let i=0;i<n;i++)o[i]*=env[i]*0.8;
+  for(let i=0;i<n;i++)o[i]+=0.25*Math.sin(2*Math.PI*110*i/sr)*env[i];
+  return o;}
+function allpass1(x,fc,sr){const t=Math.tan(Math.PI*fc/sr),a=(t-1)/(t+1);
+  const o=new Float32Array(x.length);let x1=0,y1=0;
+  for(let i=0;i<x.length;i++){o[i]=a*x[i]+x1-a*y1;x1=x[i];y1=o[i];}return o;}
+function makeTest(kind,sr){
+  const n=sr*6;let L,R,name;
+  if(kind==='delay'){L=drums(n,sr,7);R=fracDelay(L,0.005*sr);name='drums · R late 5 ms';}
+  else if(kind==='anti'){L=drums(n,sr,7);R=new Float32Array(n);for(let i=0;i<n;i++)R[i]=-L[i];name='mono drums · R inverted';}
+  else if(kind==='rotate'){L=pink(n,3);R=allpass1(allpass1(allpass1(L,200,sr),900,sr),3500,sr);name='pink noise · allpass-rotated R';}
+  else{L=new Float32Array(n);R=new Float32Array(n);
+    const p1=pink(n,11),p2=pink(n,29);
+    for(let i=0;i<n;i++){
+      const t1=0.3*Math.sin(2*Math.PI*220*i/sr),t2=0.3*Math.sin(2*Math.PI*331*i/sr);
+      L[i]=t1*0.9+t2*0.35+p1[i]*0.25; R[i]=t1*0.35+t2*0.9+p2[i]*0.25;}
+    name='panned tones + independent noise';}
+  let pk=0;for(let i=0;i<n;i++)pk=Math.max(pk,Math.abs(L[i]),Math.abs(R[i]));
+  const g=pk>0?0.7/pk:1;for(let i=0;i<n;i++){L[i]*=g;R[i]*=g;}
+  return {L,R,sr,name};
+}
+
+/* ============ LiveCore: causal low-latency engine (live mode + dual-res HF path) ============ */
+class LiveCore{
+  constructor(sr,Wopt){
+    const W=Wopt===1024?1024:512;this.W=W;this.H=W/2;this.hop=W/4;this.sr=sr;
+    const lv=W===1024?10:9;
+    this.cosT=new Float32Array(W/2);this.sinT=new Float32Array(W/2);
+    for(let i=0;i<W/2;i++){this.cosT[i]=Math.cos(2*Math.PI*i/W);this.sinT[i]=Math.sin(2*Math.PI*i/W);}
+    this.rev=new Uint32Array(W);
+    for(let i=0;i<W;i++){let x=i,r=0;for(let j=0;j<lv;j++){r=(r<<1)|(x&1);x>>=1;}this.rev[i]=r;}
+    this.win=new Float32Array(W);
+    for(let i=0;i<W;i++)this.win[i]=Math.sqrt(0.5*(1-Math.cos(2*Math.PI*i/W)));
+    this.re1=new Float32Array(W);this.im1=new Float32Array(W);
+    this.re2=new Float32Array(W);this.im2=new Float32Array(W);
+    this.bufL=new Float32Array(W);this.bufR=new Float32Array(W);
+    this.olaL=new Float32Array(W);this.olaR=new Float32Array(W);
+    this.stL=new Float32Array(this.hop);this.stR=new Float32Array(this.hop);this.inFill=0;
+    this.fifoCap=W*4;
+    this.fifoWetL=new Float32Array(this.fifoCap);this.fifoWetR=new Float32Array(this.fifoCap);
+    this.fifoDryL=new Float32Array(this.fifoCap);this.fifoDryR=new Float32Array(this.fifoCap);
+    this.fRd=0;this.fWr=0;this.fCnt=0;
+    const H=this.H;
+    this.Sre=new Float32Array(H+1);this.Sim=new Float32Array(H+1);
+    this.Sll=new Float32Array(H+1);this.SrrA=new Float32Array(H+1);
+    this.Dc=new Float32Array(H+1);
+    this.rotLa=new Float32Array(H+1);this.rotRa=new Float32Array(H+1);
+    this.bass=new Float32Array(H+1);this.wRk=new Float32Array(H+1);
+    const ss=(a,b,x)=>{const t=Math.min(1,Math.max(0,(x-a)/(b-a)));return t*t*(3-2*t);};
+    this.ss=ss;
+    const fHi=180*(512/W)*(sr/48000), fLo=fHi*(2/3); // crossover scales with window & rate
+    this.bassHz=Math.round(fHi);
+    for(let k=0;k<=H;k++){const f=k*sr/W;
+      this.bass[k]=1-ss(fLo,fHi,f);   // forced bass-mono below the crossover
+      this.wRk[k]=0.5*ss(200,700,f);  // psychoacoustic width map
+    }
+    this.alpha=1-Math.exp(-this.hop/(0.080*sr));
+    this.maxSlew=Math.PI*(this.hop/sr)/0.020;
+    this.strength=1;this.bypass=false;this.mono=false;this.freeze=false;
+    this.bypassMix=0;this.monoMix=0;
+  }
+  fft(re,im,inv){
+    const n=this.W,cosT=this.cosT,sinT=this.sinT,rev=this.rev;
+    for(let i=0;i<n;i++){const j=rev[i];if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}}
+    for(let size=2;size<=n;size<<=1){
+      const half=size>>1,step=n/size;
+      for(let i=0;i<n;i+=size)for(let j=i,k=0;j<i+half;j++,k+=step){
+        const c=cosT[k],s=inv?sinT[k]:-sinT[k];
+        const tr=re[j+half]*c-im[j+half]*s,ti=re[j+half]*s+im[j+half]*c;
+        re[j+half]=re[j]-tr;im[j+half]=im[j]-ti;re[j]+=tr;im[j]+=ti;
+      }
+    }
+    if(inv){for(let i=0;i<n;i++){re[i]/=n;im[i]/=n;}}
+  }
+  wp(a){a=(a+Math.PI)%(2*Math.PI);if(a<0)a+=2*Math.PI;return a-Math.PI;}
+  frame(){
+    const W=this.W,H=this.H,win=this.win,st=this.strength;
+    const re1=this.re1,im1=this.im1,re2=this.re2,im2=this.im2;
+    for(let i=0;i<W;i++){re1[i]=this.bufL[i]*win[i];re2[i]=this.bufR[i]*win[i];}
+    im1.fill(0);im2.fill(0);
+    this.fft(re1,im1,false);this.fft(re2,im2,false);
+    for(let k=1;k<H;k++){
+      let Lr=re1[k],Li=im1[k],Rr=re2[k],Ri=im2[k];
+      const aL2=Lr*Lr+Li*Li,aR2=Rr*Rr+Ri*Ri;
+      const aL=Math.sqrt(aL2),aR=Math.sqrt(aR2),mag=aL+aR;
+      if(!this.freeze&&mag>=1e-9){
+        const a=this.alpha;
+        this.Sll[k]+=a*(aL2-this.Sll[k]);this.SrrA[k]+=a*(aR2-this.SrrA[k]);
+        this.Sre[k]+=a*((Lr*Rr+Li*Ri)-this.Sre[k]);
+        this.Sim[k]+=a*((Li*Rr-Lr*Ri)-this.Sim[k]);
+        this.Dc[k]+=this.wp(Math.atan2(this.Sim[k],this.Sre[k])-this.Dc[k]);
+      }
+      const C=(this.Sre[k]*this.Sre[k]+this.Sim[k]*this.Sim[k])/(this.Sll[k]*this.SrrA[k]+1e-18);
+      const amt=this.ss(0.25,0.6,C)*st;
+      if(mag>=1e-9&&amt>1e-4){
+        const lim=this.maxSlew;
+        this.rotLa[k]=this.wp(this.rotLa[k]+Math.max(-lim,Math.min(lim,this.wp(-0.5*this.Dc[k]*amt-this.rotLa[k]))));
+        this.rotRa[k]=this.wp(this.rotRa[k]+Math.max(-lim,Math.min(lim,this.wp( 0.5*this.Dc[k]*amt-this.rotRa[k]))));
+      }else if(mag>=1e-9){this.rotLa[k]*=(1-this.alpha);this.rotRa[k]*=(1-this.alpha);}
+      const rl=this.rotLa[k],rr=this.rotRa[k];
+      if(Math.abs(rl)>1e-7||Math.abs(rr)>1e-7||amt>1e-4){
+        const g=1+this.wRk[k]*Math.sin(Math.min(Math.abs(this.Dc[k]),Math.PI/2))*amt;
+        let gL,gR;
+        if(aL>=aR){gL=Math.sqrt(g);gR=1/Math.sqrt(g);}else{gL=1/Math.sqrt(g);gR=Math.sqrt(g);}
+        const e0=aL2+aR2,e1=aL2*gL*gL+aR2*gR*gR,nm=e1>1e-18?Math.sqrt(e0/e1):1;
+        gL*=nm;gR*=nm;
+        const pL=Math.atan2(Li,Lr)+rl,pR=Math.atan2(Ri,Rr)+rr;
+        Lr=aL*gL*Math.cos(pL);Li=aL*gL*Math.sin(pL);
+        Rr=aR*gR*Math.cos(pR);Ri=aR*gR*Math.sin(pR);
+      }
+      const bm=this.bass[k]*st;
+      if(bm>0){
+        const Mre=0.5*(Lr+Rr),Mim=0.5*(Li+Ri);
+        Lr+=(Mre-Lr)*bm;Li+=(Mim-Li)*bm;
+        Rr+=(Mre-Rr)*bm;Ri+=(Mim-Ri)*bm;
+      }
+      re1[k]=Lr;im1[k]=Li;re2[k]=Rr;im2[k]=Ri;
+      re1[W-k]=Lr;im1[W-k]=-Li;re2[W-k]=Rr;im2[W-k]=-Ri;
+    }
+    for(const k of [0,H]){
+      const bm=this.bass[k]*st,M=0.5*(re1[k]+re2[k]);
+      re1[k]+=(M-re1[k])*bm;re2[k]+=(M-re2[k])*bm;
+    }
+    im1[0]=0;im1[H]=0;im2[0]=0;im2[H]=0;
+    this.fft(re1,im1,true);this.fft(re2,im2,true);
+    this.olaL.copyWithin(0,this.hop);this.olaR.copyWithin(0,this.hop);
+    this.olaL.fill(0,W-this.hop);this.olaR.fill(0,W-this.hop);
+    for(let i=0;i<W;i++){this.olaL[i]+=re1[i]*win[i];this.olaR[i]+=re2[i]*win[i];}
+  }
+  resetStreams(){
+    this.bufL.fill(0);this.bufR.fill(0);
+    this.olaL.fill(0);this.olaR.fill(0);
+    this.stL.fill(0);this.stR.fill(0);this.inFill=0;
+    this.fifoWetL.fill(0);this.fifoWetR.fill(0);this.fifoDryL.fill(0);this.fifoDryR.fill(0);
+    this.fRd=0;this.fWr=0;this.fCnt=0;
+    this.bypassMix=this.bypass?1:0;this.monoMix=this.mono?1:0;
+  }
+  processBlock(inL,inR,outL,outR,N){
+    const hop=this.hop,cap=this.fifoCap,stp=1/(0.010*this.sr);
+    for(let i=0;i<N;i++){
+      this.stL[this.inFill]=inL[i];this.stR[this.inFill]=inR[i];this.inFill++;
+      if(this.inFill===hop){
+        this.bufL.copyWithin(0,hop);this.bufR.copyWithin(0,hop);
+        this.bufL.set(this.stL,this.W-hop);this.bufR.set(this.stR,this.W-hop);
+        this.inFill=0;
+        this.frame();
+        for(let j=0;j<hop;j++){
+          this.fifoWetL[this.fWr]=this.olaL[j]*0.5;
+          this.fifoWetR[this.fWr]=this.olaR[j]*0.5;
+          this.fifoDryL[this.fWr]=this.bufL[j];
+          this.fifoDryR[this.fWr]=this.bufR[j];
+          this.fWr=(this.fWr+1)%cap;
+          this.fCnt=Math.min(cap,this.fCnt+1);
+        }
+      }
+    }
+    const bT=this.bypass?1:0,mT=this.mono?1:0;
+    for(let i=0;i<N;i++){
+      let wl=0,wr=0,dl=0,dr=0;
+      if(this.fCnt>0){
+        wl=this.fifoWetL[this.fRd];wr=this.fifoWetR[this.fRd];
+        dl=this.fifoDryL[this.fRd];dr=this.fifoDryR[this.fRd];
+        this.fRd=(this.fRd+1)%cap;this.fCnt--;
+      }
+      this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
+      this.monoMix+=Math.max(-stp,Math.min(stp,mT-this.monoMix));
+      const L=wl*(1-this.bypassMix)+dl*this.bypassMix;
+      const R=wr*(1-this.bypassMix)+dr*this.bypassMix;
+      const M=0.5*(L+R);
+      outL[i]=L+(M-L)*this.monoMix;
+      outR[i]=R+(M-R)*this.monoMix;
+    }
+  }
+}
+const LIVE_WORKLET_URL=(()=>{try{
+  const wsrc=LiveCore.toString()+
+'\nclass MLL extends AudioWorkletProcessor{'+
+'constructor(options){super();this.core=new LiveCore(sampleRate,(options&&options.processorOptions&&options.processorOptions.W)||512);'+
+'this.port.onmessage=e=>Object.assign(this.core,e.data);}'+
+'process(inputs,outputs){const i=inputs[0],o=outputs[0];'+
+'if(!o||!o[0])return true;'+
+'if(!i||!i[0]){o[0].fill(0);if(o[1])o[1].fill(0);return true;}'+
+'this.core.processBlock(i[0],i[1]||i[0],o[0],o[1]||o[0],i[0].length);return true;}}'+
+'\nregisterProcessor("monolock-live",MLL);';
+  return URL.createObjectURL(new Blob([wsrc],{type:'application/javascript'}));
+}catch(e){return null;}})();
+
+/* ========================= app state ========================= */
+const $=id=>document.getElementById(id);
+let actx=null, src={L:null,R:null,sr:48000,name:''}, proc=null;
+let strength=1.0, playing=false, monitorProc=false, monoOn=false;
+let nodes=null, processing=false, pendingReprocess=false;
+let scopeAn=null, liveMode=false, liveNode=null, liveIsSP=false, liveCoreSP=null,
+    liveSrc=null, liveInput=null, micStream=null, playingLive=false,
+    useMic=false, learnFrozen=false, liveCorr=0, liveTick=0,
+    liveW=512, liveNodeW=0, workletLoaded=false;
+
+function ensureCtx(){if(!actx)actx=new (window.AudioContext||window.webkitAudioContext)();return actx;}
+
+async function reprocess(){
+  if(!src.L)return;
+  if(processing){pendingReprocess=true;return;}
+  processing=true;
+  $('status').textContent='processing…';
+  const bar=$('progress').firstElementChild;
+  const t0=performance.now();
+  try{
+    proc=await processAll(src.L,src.R,src.sr,strength,p=>{bar.style.width=(p*100).toFixed(0)+'%';});
+    { // loudness-matched A/B: processed monitoring gain-compensated to the original
+      const r2=(a,b)=>{let s2=0;for(let i=0;i<a.length;i++)s2+=a[i]*a[i]+b[i]*b[i];return Math.sqrt(s2/a.length);};
+      const ra=r2(src.L,src.R),rb=r2(proc.oL,proc.oR);
+      proc.abGain=Math.min(2,Math.max(0.5,rb>1e-9?ra/rb:1));
+    }
+    const ms=(performance.now()-t0).toFixed(0);
+    $('status').textContent=`done in ${ms} ms · ${(src.L.length/src.sr).toFixed(1)} s @ ${src.sr} Hz · win ${proc.win}/FFT ${proc.nfft} · ${proc.rounds} render round${proc.rounds>1?'s':''} · ${proc.residual===0?'verified: no destructive bands':'warning: '+proc.residual+' destructive band(s) remain'}`;
+    updateReadouts();
+    if(playing)restartPlayback();
+    $('play').disabled=$('ab').disabled=$('monobtn').disabled=false;
+    $('exportbtn').disabled=liveMode;
+  }catch(e){$('status').textContent='engine error: '+e.message;console.error(e);}
+  processing=false; bar.style.width='0%';
+  if(pendingReprocess){pendingReprocess=false;reprocess();}
+}
+
+function fmt(v){return (v>=0?'+':'')+v.toFixed(2);}
+function led(id,on,warn){const e=$(id);e.classList.toggle('warn',!!warn);e.classList.toggle('on',!!on&&!warn);}
+function updateReadouts(){
+  if(!proc)return;
+  $('corrPreV').textContent=fmt(proc.corrPre);
+  $('corrPostV').textContent=fmt(proc.corrPost);
+  setBar('corrPreBar',proc.corrPre); setBar('corrPostBar',proc.corrPost);
+  const lagMs=proc.lag/src.sr*1000, driftMs=(proc.lagRange||0)/src.sr*1000;
+  $('lagV').textContent=(Math.abs(proc.lag)<0.05&&driftMs<0.05)?'0 · aligned'
+    :`${lagMs.toFixed(2)} ms${driftMs>0.05?' ±'+(driftMs/2).toFixed(1):''} ${proc.lag<0?'(R late)':'(L late)'}`;
+  $('gainV').textContent=(proc.gainDb>=0?'+':'')+proc.gainDb.toFixed(1)+' dB';
+  $('gainV').style.color=proc.gainDb>=-0.01?'var(--post)':'var(--warn)';
+  led('ledTrack',(proc.lagRange||0)>1,false);
+  led('ledGL',proc.glApplied,false);
+  led('ledVerify',proc.residual===0,proc.residual>0);
+  led('ledDual',proc.dualRes,false);
+  drawBands();
+}
+function setBar(id,v){ // v in [-1,1]; center at 50%
+  const el=$(id), pct=Math.abs(v)*50;
+  el.style.left=v>=0?'50%':(50-pct)+'%';
+  el.style.width=pct+'%';
+  el.style.background=v>=0?getComputedStyle(el).backgroundColor:'var(--warn)';
+  el.style.background=v>=0?(id==='corrPreBar'?'var(--pre)':'var(--post)'):'var(--warn)';
+}
+function corrColor(v){
+  if(v<0)return `rgba(224,87,74,${0.25+0.75*Math.min(1,-v)})`;
+  return `rgba(82,196,179,${0.15+0.85*Math.min(1,v)})`;
+}
+function drawBands(){
+  const c=$('bands'),ctx2=c.getContext('2d');
+  ctx2.fillStyle='#07090b';ctx2.fillRect(0,0,c.width,c.height);
+  if(!proc)return;
+  const w=c.width/NBANDS;
+  for(let b=0;b<NBANDS;b++){
+    ctx2.fillStyle=corrColor(proc.bandPre[b]);
+    ctx2.fillRect(b*w+1,2,w-2,c.height/2-3);
+    ctx2.fillStyle=corrColor(proc.bandPost[b]);
+    ctx2.fillRect(b*w+1,c.height/2+1,w-2,c.height/2-3);
+  }
+}
+
+/* ---------- playback graph ---------- */
+function buildBuffer(L,R){
+  const b=ensureCtx().createBuffer(2,L.length,src.sr);
+  b.getChannelData(0).set(L); b.getChannelData(1).set(R); return b;
+}
+function stopPlayback(){
+  if(nodes){try{nodes.sA.stop();nodes.sB.stop();}catch(e){}
+    nodes=null;}
+  scopeAn=null;
+  playing=false;$('play').textContent='▶ PLAY';
+}
+function restartPlayback(){stopPlayback();startPlayback();}
+function startPlayback(){
+  if(!src.L||!proc)return;
+  const ctx=ensureCtx(); if(ctx.state==='suspended')ctx.resume();
+  const sA=ctx.createBufferSource(); sA.buffer=buildBuffer(src.L,src.R); sA.loop=true;
+  const sB=ctx.createBufferSource(); sB.buffer=buildBuffer(proc.oL,proc.oR); sB.loop=true;
+  const gA=ctx.createGain(),gB=ctx.createGain(),sum=ctx.createGain();
+  gA.gain.value=monitorProc?0:1; gB.gain.value=monitorProc?(proc.abGain||1):0;
+  sA.connect(gA).connect(sum); sB.connect(gB).connect(sum);
+  // mono matrix
+  const split=ctx.createChannelSplitter(2), merge=ctx.createChannelMerger(2);
+  const mLL=ctx.createGain(),mRL=ctx.createGain(),mLR=ctx.createGain(),mRR=ctx.createGain();
+  mLL.gain.value=mRL.gain.value=mLR.gain.value=mRR.gain.value=0.5;
+  sum.connect(split);
+  split.connect(mLL,0);split.connect(mRL,1);split.connect(mLR,0);split.connect(mRR,1);
+  mLL.connect(merge,0,0);mRL.connect(merge,0,0);mLR.connect(merge,0,1);mRR.connect(merge,0,1);
+  const dry=ctx.createGain(),mono=ctx.createGain(),master=ctx.createGain();
+  dry.gain.value=monoOn?0:1; mono.gain.value=monoOn?1:0;
+  sum.connect(dry); merge.connect(mono);
+  dry.connect(master); mono.connect(master);
+  master.connect(ctx.destination);
+  // scope taps the actual OUTPUT (post mono matrix): mono audition collapses the trace to the mid axis
+  const scSplit=ctx.createChannelSplitter(2);
+  const anL=ctx.createAnalyser(),anR=ctx.createAnalyser();
+  anL.fftSize=anR.fftSize=2048;
+  master.connect(scSplit); scSplit.connect(anL,0); scSplit.connect(anR,1);
+  const t=ctx.currentTime+0.05; sA.start(t); sB.start(t);
+  nodes={sA,sB,gA,gB,dry,mono,anL,anR};
+  scopeAn={anL,anR};
+  playing=true;$('play').textContent='■ STOP';
+}
+
+/* ---------- goniometer (round vectorscope) ---------- */
+const gonio=$('gonio'),gctx=gonio.getContext('2d');
+const tdL=new Float32Array(2048),tdR=new Float32Array(2048);
+function drawGonio(){
+  requestAnimationFrame(drawGonio);
+  const W=gonio.width,Hh=gonio.height,cx=W/2,cy=Hh/2;
+  gctx.fillStyle='rgba(6,8,7,0.26)';gctx.fillRect(0,0,W,Hh);
+  gctx.strokeStyle='rgba(120,132,124,0.16)';gctx.lineWidth=1;
+  gctx.beginPath();
+  gctx.moveTo(cx,cy-Hh*0.46);gctx.lineTo(cx,cy+Hh*0.46);
+  gctx.moveTo(cx-W*0.46,cy);gctx.lineTo(cx+W*0.46,cy);
+  gctx.moveTo(cx-W*0.32,cy-Hh*0.32);gctx.lineTo(cx+W*0.32,cy+Hh*0.32);
+  gctx.moveTo(cx-W*0.32,cy+Hh*0.32);gctx.lineTo(cx+W*0.32,cy-Hh*0.32);
+  gctx.stroke();
+  gctx.beginPath();gctx.arc(cx,cy,Math.min(W,Hh)*0.30,0,7);gctx.stroke();
+  if(!scopeAn)return;
+  scopeAn.anL.getFloatTimeDomainData(tdL);scopeAn.anR.getFloatTimeDomainData(tdR);
+  if(liveMode){ // ballistic live output correlation onto the POST meter
+    let s=0,sa=0,sb=0;
+    for(let i=0;i<2048;i+=4){s+=tdL[i]*tdR[i];sa+=tdL[i]*tdL[i];sb+=tdR[i]*tdR[i];}
+    const c=sa>1e-9&&sb>1e-9?s/Math.sqrt(sa*sb):liveCorr;
+    liveCorr+=(c-liveCorr)*0.08;
+    if((liveTick++&7)===0){$('corrPostV').textContent=fmt(liveCorr);setBar('corrPostBar',liveCorr);}
+  }
+  gctx.fillStyle=monitorProc?'rgba(79,200,180,0.85)':'rgba(232,163,61,0.85)';
+  const sc=Math.min(W,Hh)*0.42;
+  for(let i=0;i<2048;i+=2){
+    const x=(tdL[i]-tdR[i])*0.707, y=(tdL[i]+tdR[i])*0.707;
+    gctx.fillRect(cx+x*sc-0.8, cy-y*sc-0.8, 1.7,1.7);
+  }
+}
+drawGonio();
+
+/* ---------- strength knob (skeuomorphic) ---------- */
+const knob=$('knob'),kctx=knob.getContext('2d');
+function drawKnob(){
+  const S=knob.width,c=S/2;
+  kctx.clearRect(0,0,S,S);
+  const a0=Math.PI*0.75,a1=Math.PI*2.25,a=a0+(a1-a0)*strength;
+  kctx.lineCap='round';
+  kctx.strokeStyle='rgba(145,152,162,0.28)';kctx.lineWidth=3;
+  kctx.beginPath();kctx.arc(c,c,c-7,a0,a1);kctx.stroke();
+  kctx.strokeStyle='rgba(79,200,180,0.9)';
+  kctx.beginPath();kctx.arc(c,c,c-7,a0,a);kctx.stroke();
+  for(let t=0;t<=10;t++){
+    const ta=a0+(a1-a0)*t/10;
+    kctx.strokeStyle=t/10<=strength+1e-6?'rgba(79,200,180,0.75)':'rgba(145,152,162,0.3)';
+    kctx.lineWidth=t%5===0?2:1;
+    kctx.beginPath();
+    kctx.moveTo(c+Math.cos(ta)*(c-14),c+Math.sin(ta)*(c-14));
+    kctx.lineTo(c+Math.cos(ta)*(c-3),c+Math.sin(ta)*(c-3));
+    kctx.stroke();
+  }
+  const rimR=c-23;
+  const rim=kctx.createLinearGradient(0,c-rimR,0,c+rimR);
+  rim.addColorStop(0,'#90959e');rim.addColorStop(0.28,'#585d65');
+  rim.addColorStop(0.62,'#2b2e34');rim.addColorStop(1,'#464a51');
+  kctx.fillStyle=rim;
+  kctx.beginPath();kctx.arc(c,c,rimR,0,7);kctx.fill();
+  for(let t=0;t<52;t++){
+    const ta=t/52*2*Math.PI;
+    kctx.strokeStyle=t%2?'rgba(0,0,0,0.38)':'rgba(255,255,255,0.13)';
+    kctx.lineWidth=1.6;
+    kctx.beginPath();
+    kctx.moveTo(c+Math.cos(ta)*(rimR-6),c+Math.sin(ta)*(rimR-6));
+    kctx.lineTo(c+Math.cos(ta)*(rimR-1),c+Math.sin(ta)*(rimR-1));
+    kctx.stroke();
+  }
+  const capR=rimR-9;
+  const cap=kctx.createRadialGradient(c-capR*0.35,c-capR*0.45,capR*0.08,c,c,capR);
+  cap.addColorStop(0,'#4c5057');cap.addColorStop(0.5,'#34373d');cap.addColorStop(1,'#1b1d21');
+  kctx.fillStyle=cap;
+  kctx.beginPath();kctx.arc(c,c,capR,0,7);kctx.fill();
+  kctx.strokeStyle='rgba(0,0,0,0.55)';kctx.lineWidth=1;
+  kctx.beginPath();kctx.arc(c,c,capR,0,7);kctx.stroke();
+  kctx.strokeStyle='#e8ecf2';kctx.lineWidth=3.5;
+  kctx.beginPath();
+  kctx.moveTo(c+Math.cos(a)*capR*0.35,c+Math.sin(a)*capR*0.35);
+  kctx.lineTo(c+Math.cos(a)*(capR-7),c+Math.sin(a)*(capR-7));
+  kctx.stroke();
+  kctx.fillStyle='#5ae8cb';
+  kctx.beginPath();kctx.arc(c+Math.cos(a)*(capR-9),c+Math.sin(a)*(capR-9),2.6,0,7);kctx.fill();
+  $('knobval').textContent=Math.round(strength*100)+'%';
+  knob.setAttribute('aria-valuenow',Math.round(strength*100));
+}
+drawKnob();
+let dragging=false,dragY=0,dragV=1,knobTimer=null;
+function knobSet(v,commit){
+  strength=Math.min(1,Math.max(0,v));drawKnob();
+  if(liveMode){if(liveNode)liveNode.post({strength});return;}
+  clearTimeout(knobTimer);
+  if(commit)reprocess();else knobTimer=setTimeout(reprocess,400);
+}
+knob.addEventListener('pointerdown',e=>{dragging=true;dragY=e.clientY;dragV=strength;knob.setPointerCapture(e.pointerId);});
+knob.addEventListener('pointermove',e=>{if(dragging)knobSet(dragV+(dragY-e.clientY)/150,false);});
+knob.addEventListener('pointerup',()=>{dragging=false;});
+knob.addEventListener('keydown',e=>{
+  const step=e.shiftKey?0.01:0.05;
+  if(e.key==='ArrowUp'||e.key==='ArrowRight'){knobSet(strength+step,false);e.preventDefault();}
+  else if(e.key==='ArrowDown'||e.key==='ArrowLeft'){knobSet(strength-step,false);e.preventDefault();}
+  else if(e.key==='Home'){knobSet(0,false);e.preventDefault();}
+  else if(e.key==='End'){knobSet(1,false);e.preventDefault();}
+});
+knob.addEventListener('dblclick',()=>knobSet(1,true));
+
+/* ---------- source loading ---------- */
+function setSource(L,R,sr,name){
+  stopPlayback(); stopLive();
+  src={L,R,sr,name};
+  $('srcinfo').textContent=`${name}\n${(L.length/sr).toFixed(1)} s · ${sr} Hz · stereo`;
+  reprocess();
+}
+document.querySelectorAll('[data-test]').forEach(b=>b.addEventListener('click',()=>{
+  const sr=ensureCtx().sampleRate;
+  const t=makeTest(b.dataset.test,sr);
+  document.querySelectorAll('[data-test]').forEach(x=>x.classList.toggle('active',x===b));
+  setSource(t.L,t.R,sr,t.name);
+}));
+$('drop').addEventListener('click',()=>$('file').click());
+$('file').addEventListener('change',e=>{if(e.target.files[0])loadFile(e.target.files[0]);});
+['dragover','dragleave','drop'].forEach(ev=>$('drop').addEventListener(ev,e=>{
+  e.preventDefault();
+  $('drop').classList.toggle('hover',ev==='dragover');
+  if(ev==='drop'&&e.dataTransfer.files[0])loadFile(e.dataTransfer.files[0]);
+}));
+async function loadFile(f){
+  $('status').textContent='decoding…';
+  try{
+    const buf=await ensureCtx().decodeAudioData(await f.arrayBuffer());
+    const L=buf.getChannelData(0);
+    const R=buf.numberOfChannels>1?buf.getChannelData(1):buf.getChannelData(0);
+    document.querySelectorAll('[data-test]').forEach(x=>x.classList.remove('active'));
+    setSource(new Float32Array(L),new Float32Array(R),buf.sampleRate,f.name);
+  }catch(e){$('status').textContent='decode failed: '+e.message;}
+}
+
+/* ---------- transport ---------- */
+$('play').addEventListener('click',()=>{
+  if(liveMode){playingLive?stopLive():startLiveUI();}
+  else{playing?stopPlayback():startPlayback();}
+});
+function updateScopeChip(){
+  $('scopelbl').textContent=(monitorProc?'PROCESSED':'ORIGINAL')+(monoOn?' · MONO':'');
+  $('scopelbl').style.color=monoOn?'var(--vfd)':(monitorProc?'var(--post)':'var(--pre)');
+}
+$('ab').addEventListener('click',()=>{
+  monitorProc=!monitorProc;
+  const btn=$('ab');
+  btn.classList.toggle('active',monitorProc);
+  btn.childNodes[btn.childNodes.length-1].textContent='monitor: '+(monitorProc?'processed':'original');
+  updateScopeChip();
+  if(liveMode&&liveNode)liveNode.post({bypass:!monitorProc});
+  if(nodes){const t=ensureCtx().currentTime;
+    nodes.gA.gain.setTargetAtTime(monitorProc?0:1,t,0.01);
+    nodes.gB.gain.setTargetAtTime(monitorProc?((proc&&proc.abGain)||1):0,t,0.01);}
+});
+$('monobtn').addEventListener('click',()=>{
+  monoOn=!monoOn;
+  const btn=$('monobtn');
+  btn.classList.toggle('active',monoOn);
+  btn.childNodes[btn.childNodes.length-1].textContent='mono audition: '+(monoOn?'ON':'off');
+  updateScopeChip();
+  if(liveMode&&liveNode)liveNode.post({mono:monoOn});
+  if(nodes){const t=ensureCtx().currentTime;
+    nodes.dry.gain.setTargetAtTime(monoOn?0:1,t,0.01);
+    nodes.mono.gain.setTargetAtTime(monoOn?1:0,t,0.01);}
+});
+
+/* ---------- live mode ---------- */
+async function ensureLive(){
+  const ctx=ensureCtx();
+  if(liveNode&&liveNodeW===liveW)return true;
+  if(liveNode){try{liveNode.disconnect()}catch(e){} liveNode=null; liveCoreSP=null;}
+  try{
+    if(!LIVE_WORKLET_URL||!ctx.audioWorklet)throw new Error('worklet unavailable');
+    if(!workletLoaded){await ctx.audioWorklet.addModule(LIVE_WORKLET_URL);workletLoaded=true;}
+    liveNode=new AudioWorkletNode(ctx,'monolock-live',
+      {numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2],processorOptions:{W:liveW}});
+    liveNode.post=d=>liveNode.port.postMessage(d);
+    liveIsSP=false; liveNodeW=liveW;
+  }catch(e){
+    try{
+      liveCoreSP=new LiveCore(ctx.sampleRate,liveW);
+      const sp=ctx.createScriptProcessor(512,2,2);
+      sp.onaudioprocess=ev=>{
+        liveCoreSP.processBlock(
+          ev.inputBuffer.getChannelData(0),ev.inputBuffer.getChannelData(1),
+          ev.outputBuffer.getChannelData(0),ev.outputBuffer.getChannelData(1),512);
+      };
+      liveNode=sp; liveNode.post=d=>Object.assign(liveCoreSP,d); liveIsSP=true;
+      liveNodeW=liveW;
+    }catch(e2){
+      $('status').textContent='LIVE · unavailable in this browser: '+e2.message;
+      return false;
+    }
+  }
+  return true;
+}
+function stopLive(){
+  if(liveSrc){try{liveSrc.stop()}catch(e){} liveSrc=null;}
+  if(liveInput){try{liveInput.disconnect()}catch(e){} liveInput=null;}
+  if(liveNode){try{liveNode.disconnect()}catch(e){}}
+  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;}
+  if(playingLive){scopeAn=null; playingLive=false; $('play').textContent='▶ PLAY';}
+}
+async function startLiveUI(){
+  const ctx=ensureCtx(); if(ctx.state==='suspended')ctx.resume();
+  if(!useMic&&!src.L){$('status').textContent='LIVE · load a source or switch input to microphone';return;}
+  if(!(await ensureLive()))return;
+  liveNode.post({strength,bypass:!monitorProc,mono:monoOn,freeze:learnFrozen});
+  let input;
+  if(useMic){
+    try{
+      micStream=await navigator.mediaDevices.getUserMedia(
+        {audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+      input=ctx.createMediaStreamSource(micStream);
+    }catch(e){$('status').textContent='LIVE · microphone unavailable: '+e.message;return;}
+  }else{
+    const s=ctx.createBufferSource(); s.buffer=buildBuffer(src.L,src.R); s.loop=true; s.start();
+    input=s; liveSrc=s;
+  }
+  input.connect(liveNode); liveInput=input;
+  const split=ctx.createChannelSplitter(2);
+  const anL=ctx.createAnalyser(),anR=ctx.createAnalyser();anL.fftSize=anR.fftSize=2048;
+  liveNode.connect(split); split.connect(anL,0); split.connect(anR,1);
+  liveNode.connect(ctx.destination);
+  scopeAn={anL,anR}; playingLive=true;
+  $('play').textContent='■ STOP';
+  const eng=((liveW-liveW/4+Math.max(0,liveW/4-128))/ctx.sampleRate*1000).toFixed(1); // measured: staging adds (hop-quantum)
+  const xo=Math.round(180*512/liveW*(ctx.sampleRate/48000));
+  $('status').textContent='LIVE · '+liveW+'-pt · ~'+eng+' ms engine latency'+(liveIsSP?' + 512-sample host buffer (fallback path)':' · AudioWorklet')
+    +' · bass mono <'+xo+' Hz · '+(learnFrozen?'estimators frozen':'learning');
+}
+function setMode(live){
+  if(live===liveMode)return;
+  stopPlayback(); stopLive();
+  liveMode=live;
+  $('modeStudio').classList.toggle('active',!live);
+  $('modeLive').classList.toggle('active',live);
+  $('micbtn').disabled=!live;
+  $('learnbtn').disabled=!live;
+  $('winbtn').disabled=!live;
+  $('exportbtn').disabled=live||!proc;
+  $('play').disabled=live?false:!proc;
+  $('corrPostV').textContent='—'; liveCorr=0;
+  $('status').textContent=live
+    ? 'LIVE · causal engine: '+liveW+'-pt window, leaky estimators, forced bass mono · press PLAY'
+    : (proc?'STUDIO · render ready':'load a source or pick a test signal');
+  if(!live&&proc)updateReadouts();
+}
+$('modeStudio').addEventListener('click',()=>setMode(false));
+$('modeLive').addEventListener('click',()=>setMode(true));
+$('micbtn').addEventListener('click',()=>{
+  useMic=!useMic;
+  const btn=$('micbtn');
+  btn.classList.toggle('active',useMic);
+  btn.childNodes[btn.childNodes.length-1].textContent='input: '+(useMic?'microphone':'sample loop');
+  if(playingLive){stopLive();startLiveUI();}
+});
+$('learnbtn').addEventListener('click',()=>{
+  learnFrozen=!learnFrozen;
+  const btn=$('learnbtn');
+  btn.classList.toggle('active',learnFrozen);
+  btn.childNodes[btn.childNodes.length-1].textContent='estimators: '+(learnFrozen?'FROZEN':'learning');
+  if(liveNode)liveNode.post({freeze:learnFrozen});
+});
+/* ---------- WAV export ---------- */
+function exportWav(){
+  if(!proc)return;
+  const n=proc.oL.length,sr2=src.sr;
+  const buf=new ArrayBuffer(44+n*4),v=new DataView(buf);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  ws(0,'RIFF');v.setUint32(4,36+n*4,true);ws(8,'WAVE');ws(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,2,true);
+  v.setUint32(24,sr2,true);v.setUint32(28,sr2*4,true);v.setUint16(32,4,true);v.setUint16(34,16,true);
+  ws(36,'data');v.setUint32(40,n*4,true);
+  let o=44;
+  for(let i=0;i<n;i++){
+    v.setInt16(o,Math.max(-32768,Math.min(32767,Math.round(proc.oL[i]*32767))),true);o+=2;
+    v.setInt16(o,Math.max(-32768,Math.min(32767,Math.round(proc.oR[i]*32767))),true);o+=2;
+  }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+  a.download='monolock-render.wav'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+$('exportbtn').addEventListener('click',exportWav);
+$('winbtn').addEventListener('click',()=>{
+  liveW=liveW===512?1024:512;
+  const btn=$('winbtn');
+  btn.classList.toggle('active',liveW===1024);
+  btn.childNodes[btn.childNodes.length-1].textContent='live window: '+(liveW===512?'512 · tight':'1024 · HQ');
+  const was=playingLive;
+  stopLive();
+  if(liveNode){try{liveNode.disconnect()}catch(e){}}
+  liveNode=null; liveCoreSP=null;
+  if(was)startLiveUI();
+});
+</script>
+</body>
+</html>

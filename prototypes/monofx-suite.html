@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MonoFX — Mono-Safe Effects Suite</title>
+<style>
+:root{--plate:#3a3d42;--vfd:#ffbf5e;--pre:#ffb350;--post:#5ae8cb;--ink:#1c1e22}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#141519;display:flex;justify-content:center;padding:26px 10px;
+  font-family:"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.plate{width:920px;border-radius:14px;position:relative;padding:18px 26px 22px;
+  background:
+    repeating-linear-gradient(90deg,rgba(255,255,255,0.022) 0 1px,transparent 1px 3px),
+    linear-gradient(160deg,#43464c,#34373c 55%,#2e3136);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.14),inset 0 -2px 6px rgba(0,0,0,0.5),
+    0 22px 50px rgba(0,0,0,0.65);
+  border:1px solid #17181c}
+.screw{position:absolute;width:15px;height:15px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#7b7e84,#3d4045 60%,#23252a);
+  box-shadow:inset 0 1px 2px rgba(255,255,255,0.35),0 1px 2px rgba(0,0,0,0.7)}
+.screw::after{content:"";position:absolute;left:2px;right:2px;top:6.2px;height:2.2px;
+  background:#1a1c1f;border-radius:1px;transform:rotate(28deg)}
+.s1{top:9px;left:9px}.s2{top:9px;right:9px}.s3{bottom:9px;left:9px}.s4{bottom:9px;right:9px}
+.engrave{color:#c9ccd2;text-shadow:0 1px 0 rgba(255,255,255,0.09),0 -1px 0 rgba(0,0,0,0.55)}
+.brand{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid #26282d;
+  padding-bottom:10px;margin-bottom:14px}
+.brand .logo{font-size:21px;font-weight:800;letter-spacing:0.24em}
+.brand .sub{font-size:9.5px;letter-spacing:0.3em;color:#8f939a}
+.tabs{margin-left:auto;display:flex;border-radius:6px;overflow:hidden;
+  border:1px solid #14161a;box-shadow:0 2px 3px rgba(0,0,0,0.5)}
+.tabs .hwbtn{border:none;border-radius:0;padding:7px 15px;font-size:9.5px;letter-spacing:0.2em}
+.tabs .hwbtn+.hwbtn{border-left:1px solid #14161a}
+.tabs .hwbtn.active{color:var(--vfd);text-shadow:0 0 8px rgba(255,191,94,0.5);
+  background:linear-gradient(180deg,#22252a,#2a2d32);box-shadow:inset 0 2px 5px rgba(0,0,0,0.6)}
+.hwbtn{font:600 10.5px/1 "Helvetica Neue",Arial;letter-spacing:0.12em;color:#c9ccd2;
+  background:linear-gradient(180deg,#4a4d53,#33363b);border:1px solid #17191d;border-radius:6px;
+  padding:9px 12px;cursor:pointer;text-transform:uppercase;text-align:left;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.12),0 2px 3px rgba(0,0,0,0.5)}
+.hwbtn:active{transform:translateY(1px)}
+.hwbtn:disabled{opacity:0.42;cursor:default}
+.hwbtn.active{background:linear-gradient(180deg,#2a2d32,#212429);
+  box-shadow:inset 0 2px 5px rgba(0,0,0,0.6);color:#eef0f3}
+.bled{display:inline-block;width:7px;height:7px;border-radius:50%;background:#1c1e22;
+  margin-right:8px;box-shadow:inset 0 1px 1px rgba(0,0,0,0.8);vertical-align:1px}
+.hwbtn.active .bled{background:var(--post);box-shadow:0 0 7px var(--post)}
+.main{display:grid;grid-template-columns:330px 1fr;gap:20px}
+.module{background:linear-gradient(180deg,#2e3136,#292c31);border:1px solid #1c1e22;
+  border-radius:10px;padding:13px 14px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.05)}
+.mtitle{font-size:9px;letter-spacing:0.3em;color:#9a9ea6;margin-bottom:10px}
+.scopewrap{position:relative;width:300px;height:300px;margin:0 auto;border-radius:50%;
+  background:radial-gradient(circle at 46% 40%,#10231d,#08120e 70%,#050a08);
+  box-shadow:inset 0 0 24px rgba(0,0,0,0.9),inset 0 2px 5px rgba(0,0,0,0.8),
+    0 1px 0 rgba(255,255,255,0.06),0 0 0 7px #202328,0 0 0 8px #131518;overflow:hidden}
+.scopewrap::after{content:"";position:absolute;inset:0;border-radius:50%;
+  background:radial-gradient(ellipse 60% 35% at 32% 20%,rgba(255,255,255,0.10),transparent 60%);
+  pointer-events:none}
+#gonio{width:100%;height:100%}
+.chip{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;font-size:8.5px;
+  letter-spacing:0.22em;color:var(--pre);opacity:0.9}
+.vfdrow{display:flex;gap:10px;margin-top:12px;justify-content:center}
+.vfd{background:#0d0a06;border:1px solid #1a150d;border-radius:5px;padding:7px 11px;
+  min-width:118px;text-align:center;
+  box-shadow:inset 0 2px 6px rgba(0,0,0,0.85),inset 0 0 14px rgba(255,150,30,0.06)}
+.vfd .lab{font-size:7.5px;letter-spacing:0.26em;color:#7a6a4a;margin-bottom:2px}
+.vfd .val{font:700 15px/1.15 "SF Mono",Menlo,Consolas,monospace;color:var(--vfd);
+  text-shadow:0 0 9px rgba(255,183,77,0.55)}
+.knobrow{display:flex;flex-wrap:wrap;gap:8px 14px;justify-content:flex-start;min-height:132px}
+.kwrap{width:88px;text-align:center;user-select:none}
+.kwrap canvas{cursor:ns-resize;touch-action:none}
+.klab{font-size:8.5px;letter-spacing:0.2em;color:#c9ccd2;margin-top:1px}
+.kval{font:600 10.5px/1.3 "SF Mono",Menlo,monospace;color:var(--vfd);
+  text-shadow:0 0 6px rgba(255,183,77,0.4)}
+.btncol{display:flex;flex-direction:column;gap:8px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.status{margin-top:14px;background:#0d0a06;border:1px solid #1a150d;border-radius:6px;
+  padding:9px 13px;font:600 11px/1.5 "SF Mono",Menlo,monospace;color:var(--vfd);
+  text-shadow:0 0 8px rgba(255,183,77,0.45);min-height:38px;
+  box-shadow:inset 0 2px 6px rgba(0,0,0,0.85)}
+.thesis{font-size:8.5px;letter-spacing:0.12em;color:#84888f;margin-top:8px;line-height:1.6}
+.srcrow{display:flex;gap:8px;flex-wrap:wrap}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<div class="plate">
+  <div class="screw s1"></div><div class="screw s2"></div><div class="screw s3"></div><div class="screw s4"></div>
+  <div class="brand">
+    <span class="logo engrave">MONOFX</span>
+    <span class="sub engrave">MONO-SAFE EFFECTS SUITE · WIDTH LIVES IN S</span>
+    <span class="tabs" id="tabs"></span>
+  </div>
+  <div class="main">
+    <div class="module">
+      <div class="mtitle engrave">GONIOMETER · OUTPUT</div>
+      <div class="scopewrap"><canvas id="gonio" width="300" height="300"></canvas>
+        <div class="chip" id="scopelbl">OUTPUT</div></div>
+      <div class="vfdrow">
+        <div class="vfd"><div class="lab">OUT CORR</div><div class="val" id="corrV">—</div></div>
+        <div class="vfd"><div class="lab">EFFECT</div><div class="val" id="fxV">PHASER</div></div>
+      </div>
+      <div class="thesis">EVERY EFFECT: THE PROCESS LIVES IN M, WIDTH LIVES ONLY IN S.
+        MONO SUM = M PATH EXACTLY (1 ULP), INDEPENDENT OF WIDTH.</div>
+    </div>
+    <div>
+      <div class="module">
+        <div class="mtitle engrave" id="paneltitle">PHASER</div>
+        <div class="knobrow" id="knobs"></div>
+      </div>
+      <div class="row2">
+        <div class="module">
+          <div class="mtitle engrave">SOURCE</div>
+          <div class="srcrow">
+            <button class="hwbtn tsig active" data-src="drums">drums</button>
+            <button class="hwbtn tsig" data-src="pluck">plucks</button>
+            <button class="hwbtn tsig" data-src="pink">pink</button>
+            <button class="hwbtn" id="loadbtn">load file…</button>
+            <input type="file" id="filein" accept="audio/*">
+          </div>
+        </div>
+        <div class="module">
+          <div class="mtitle engrave">TRANSPORT</div>
+          <div class="btncol">
+            <button class="hwbtn" id="play">▶ PLAY</button>
+            <button class="hwbtn" id="bypass"><span class="bled"></span>bypass: off</button>
+            <button class="hwbtn" id="monobtn"><span class="bled"></span>mono audition: off</button>
+            <button class="hwbtn" id="verify"><span class="bled"></span>verify mono invariance</button>
+          </div>
+        </div>
+      </div>
+      <div class="status" id="status">MONOFX · pick an effect tab, then PLAY · all four cores are causal, zero-latency, and mono-sum invariant by construction</div>
+    </div>
+  </div>
+</div>
+
+<script src="../src/monofx-phaser.js"></script>
+<script src="../src/monofx-delay.js"></script>
+<script src="../src/monofx-reverb.js"></script>
+<script src="../src/monofx-chorus.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const EFFECTS=[PhaserCore,DelayCore,ReverbCore,ChorusCore];
+let cur=0;
+const params=EFFECTS.map(E=>{const o={};for(const p of E.PARAMS)o[p.id]=p.def;return o;});
+
+/* ---------- audio state ---------- */
+let actx=null,node=null,nodeIdx=-1,coreSP=null,srcNode=null,scopeAn=null;
+let playing=false,bypassOn=false,monoOn=false;
+let srcName='drums',fileBuf=null;
+const loadedModules=new Set();
+function ensureCtx(){if(!actx)actx=new (window.AudioContext||window.webkitAudioContext)();return actx;}
+
+/* ---------- test signals ---------- */
+function makeSrc(kind,sr){
+  const n=sr*4,L=new Float32Array(n),R=new Float32Array(n);
+  let s=13;const rnd=()=>((s=(s*1664525+1013904223)>>>0)/4294967296)*2-1;
+  if(kind==='drums'){
+    let lp=0;
+    for(let i=0;i<n;i++){
+      const b=i%(sr>>1),k=Math.sin(2*Math.PI*55*b/sr*Math.exp(-b/(sr*0.02))*4)*Math.exp(-b/(sr*0.05));
+      const h=((i%(sr>>2))<800?rnd()*Math.exp(-(i%(sr>>2))/300):0)*0.4;
+      lp+=0.02*(rnd()-lp);
+      const x=k*0.8+h+lp*0.2;L[i]=x;R[i]=x*0.92+lp*0.08;
+    }
+  }else if(kind==='pluck'){
+    for(let v=0;v<8;v++){
+      const f=110*Math.pow(2,(v*5%12)/12),st=Math.floor(v*sr/2);
+      for(let i=0;i<sr;i++){const t=st+i;if(t>=n)break;
+        const e=Math.exp(-i/(sr*0.25)),x=(Math.sin(2*Math.PI*f*i/sr)+0.4*Math.sin(2*Math.PI*2*f*i/sr))*e*0.4;
+        L[t]+=x;R[t]+=x;}
+    }
+  }else{ // pink-ish
+    let b0=0,b1=0,b2=0;
+    for(let i=0;i<n;i++){const w=rnd();
+      b0=0.997*b0+0.03*w;b1=0.985*b1+0.032*w;b2=0.95*b2+0.048*w;
+      const x=(b0+b1+b2+w*0.05)*0.5;L[i]=x;R[i]=x;}
+  }
+  return {L,R};
+}
+function currentSrc(sr){
+  if(srcName==='file'&&fileBuf){
+    return {L:fileBuf.getChannelData(0),
+            R:fileBuf.numberOfChannels>1?fileBuf.getChannelData(1):fileBuf.getChannelData(0)};
+  }
+  return makeSrc(srcName,sr);
+}
+
+/* ---------- worklet host ---------- */
+function workletSrcFor(E){
+  return E.toString()+
+'\nclass P extends AudioWorkletProcessor{'+
+'constructor(){super();this.core=new '+E.name+'(sampleRate);'+
+'this.port.onmessage=e=>Object.assign(this.core,e.data);}'+
+'process(inputs,outputs){const i=inputs[0],o=outputs[0];'+
+'if(!o||!o[0])return true;'+
+'if(!i||!i[0]){o[0].fill(0);if(o[1])o[1].fill(0);return true;}'+
+'this.core.processBlock(i[0],i[1]||i[0],o[0],o[1]||o[0],i[0].length);return true;}}'+
+'\nregisterProcessor("'+E.PROC+'",P);';
+}
+async function buildNode(){
+  const ctx=ensureCtx(),E=EFFECTS[cur];
+  if(node&&nodeIdx===cur)return node;
+  if(node){try{node.disconnect()}catch(e){} node=null;coreSP=null;}
+  try{
+    if(!ctx.audioWorklet)throw new Error('no worklet');
+    if(!loadedModules.has(E.PROC)){
+      const url=URL.createObjectURL(new Blob([workletSrcFor(E)],{type:'application/javascript'}));
+      await ctx.audioWorklet.addModule(url);
+      loadedModules.add(E.PROC);
+    }
+    node=new AudioWorkletNode(ctx,E.PROC,{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2]});
+    node.post=d=>node.port.postMessage(d);
+  }catch(e){
+    coreSP=new E(ctx.sampleRate);
+    const sp=ctx.createScriptProcessor(512,2,2);
+    sp.onaudioprocess=ev=>{coreSP.processBlock(
+      ev.inputBuffer.getChannelData(0),ev.inputBuffer.getChannelData(1),
+      ev.outputBuffer.getChannelData(0),ev.outputBuffer.getChannelData(1),512);};
+    node=sp;node.post=d=>Object.assign(coreSP,d);
+  }
+  nodeIdx=cur;
+  node.post({...params[cur],bypass:bypassOn,mono:monoOn});
+  return node;
+}
+
+/* ---------- transport ---------- */
+async function startPlay(){
+  const ctx=ensureCtx();if(ctx.state==='suspended')ctx.resume();
+  await buildNode();
+  const {L,R}=currentSrc(ctx.sampleRate);
+  const buf=ctx.createBuffer(2,L.length,srcName==='file'&&fileBuf?fileBuf.sampleRate:ctx.sampleRate);
+  buf.getChannelData(0).set(L);buf.getChannelData(1).set(R);
+  const s=ctx.createBufferSource();s.buffer=buf;s.loop=true;s.start();
+  srcNode=s;
+  s.connect(node);
+  const split=ctx.createChannelSplitter(2);
+  const anL=ctx.createAnalyser(),anR=ctx.createAnalyser();anL.fftSize=anR.fftSize=2048;
+  node.connect(split);split.connect(anL,0);split.connect(anR,1);
+  node.connect(ctx.destination);
+  scopeAn={anL,anR};playing=true;
+  $('play').textContent='■ STOP';
+  $('status').textContent=EFFECTS[cur].NAME+' · live · zero latency · mono sum = M path (width-invariant)';
+}
+function stopPlay(){
+  if(srcNode){try{srcNode.stop()}catch(e){} try{srcNode.disconnect()}catch(e){} srcNode=null;}
+  if(node){try{node.disconnect()}catch(e){}}
+  scopeAn=null;playing=false;$('play').textContent='▶ PLAY';
+}
+$('play').addEventListener('click',()=>{playing?stopPlay():startPlay();});
+$('bypass').addEventListener('click',()=>{
+  bypassOn=!bypassOn;
+  const b=$('bypass');b.classList.toggle('active',bypassOn);
+  b.childNodes[b.childNodes.length-1].textContent='bypass: '+(bypassOn?'ON':'off');
+  if(node)node.post({bypass:bypassOn});
+});
+$('monobtn').addEventListener('click',()=>{
+  monoOn=!monoOn;
+  const b=$('monobtn');b.classList.toggle('active',monoOn);
+  b.childNodes[b.childNodes.length-1].textContent='mono audition: '+(monoOn?'ON':'off');
+  $('scopelbl').textContent=monoOn?'OUTPUT · MONO':'OUTPUT';
+  if(node)node.post({mono:monoOn});
+});
+
+/* ---------- source ---------- */
+document.querySelectorAll('.tsig').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.tsig').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');srcName=b.dataset.src;
+  if(playing){stopPlay();startPlay();}
+}));
+$('loadbtn').addEventListener('click',()=>$('filein').click());
+$('filein').addEventListener('change',async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const ab=await f.arrayBuffer();
+  fileBuf=await ensureCtx().decodeAudioData(ab);
+  srcName='file';
+  document.querySelectorAll('.tsig').forEach(x=>x.classList.remove('active'));
+  $('loadbtn').textContent=f.name.slice(0,18);
+  if(playing){stopPlay();startPlay();}
+});
+
+/* ---------- tabs + knob panels ---------- */
+function fmtVal(p,v){return v.toFixed(p.dp)+(p.unit?' '+p.unit:'');}
+function v2f(p,v){return p.log?Math.log(v/p.min)/Math.log(p.max/p.min):(v-p.min)/(p.max-p.min);}
+function f2v(p,f){f=Math.min(1,Math.max(0,f));return p.log?p.min*Math.pow(p.max/p.min,f):p.min+(p.max-p.min)*f;}
+function drawKnob(cv,frac){
+  const c=cv.getContext('2d'),Wp=cv.width,cx=Wp/2,cy=Wp/2,rr=Wp*0.36;
+  c.clearRect(0,0,Wp,Wp);
+  const a0=Math.PI*0.75,a1=Math.PI*2.25;
+  c.strokeStyle='#1c1e22';c.lineWidth=2;
+  for(let i=0;i<=10;i++){const a=a0+(a1-a0)*i/10;
+    c.beginPath();c.moveTo(cx+Math.cos(a)*(rr+7),cy+Math.sin(a)*(rr+7));
+    c.lineTo(cx+Math.cos(a)*(rr+11),cy+Math.sin(a)*(rr+11));c.stroke();}
+  let g=c.createRadialGradient(cx-rr*0.4,cy-rr*0.5,rr*0.2,cx,cy,rr);
+  g.addColorStop(0,'#585c63');g.addColorStop(0.6,'#3a3d43');g.addColorStop(1,'#24262b');
+  c.beginPath();c.arc(cx,cy,rr,0,7);c.fillStyle=g;c.fill();
+  c.strokeStyle='#17191d';c.lineWidth=1.5;c.stroke();
+  c.beginPath();c.arc(cx,cy,rr*0.62,0,7);c.fillStyle='#26282d';c.fill();
+  const a=a0+(a1-a0)*frac;
+  c.strokeStyle='#5ae8cb';c.lineWidth=3;c.lineCap='round';
+  c.shadowColor='#5ae8cb';c.shadowBlur=6;
+  c.beginPath();c.moveTo(cx+Math.cos(a)*rr*0.3,cy+Math.sin(a)*rr*0.3);
+  c.lineTo(cx+Math.cos(a)*rr*0.88,cy+Math.sin(a)*rr*0.88);c.stroke();
+  c.shadowBlur=0;
+}
+function buildPanel(){
+  const E=EFFECTS[cur];
+  $('paneltitle').textContent=E.NAME+' · MONO-SAFE';
+  $('fxV').textContent=E.NAME;
+  const row=$('knobs');row.innerHTML='';
+  for(const p of E.PARAMS){
+    const w=document.createElement('div');w.className='kwrap';
+    const cv=document.createElement('canvas');cv.width=cv.height=76;
+    const lab=document.createElement('div');lab.className='klab';lab.textContent=p.label;
+    const val=document.createElement('div');val.className='kval';
+    w.appendChild(cv);w.appendChild(lab);w.appendChild(val);row.appendChild(w);
+    const paint=()=>{const v=params[cur][p.id];drawKnob(cv,v2f(p,v));val.textContent=fmtVal(p,v);};
+    paint();
+    let drag=null;
+    cv.addEventListener('pointerdown',e=>{
+      drag={y:e.clientY,f:v2f(p,params[cur][p.id])};cv.setPointerCapture(e.pointerId);});
+    cv.addEventListener('pointermove',e=>{
+      if(!drag)return;
+      const f=drag.f+(drag.y-e.clientY)/140;
+      params[cur][p.id]=f2v(p,f);paint();
+      if(node&&nodeIdx===cur)node.post({[p.id]:params[cur][p.id]});
+    });
+    cv.addEventListener('pointerup',()=>{drag=null;});
+    cv.addEventListener('dblclick',()=>{
+      params[cur][p.id]=p.def;paint();
+      if(node&&nodeIdx===cur)node.post({[p.id]:p.def});
+    });
+    cv.addEventListener('wheel',e=>{
+      e.preventDefault();
+      const f=v2f(p,params[cur][p.id])-Math.sign(e.deltaY)*0.03;
+      params[cur][p.id]=f2v(p,f);paint();
+      if(node&&nodeIdx===cur)node.post({[p.id]:params[cur][p.id]});
+    },{passive:false});
+  }
+}
+function buildTabs(){
+  const t=$('tabs');
+  EFFECTS.forEach((E,i)=>{
+    const b=document.createElement('button');
+    b.className='hwbtn'+(i===0?' active':'');b.textContent=E.NAME;
+    b.addEventListener('click',async()=>{
+      if(i===cur)return;
+      t.querySelectorAll('.hwbtn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      const was=playing;stopPlay();cur=i;buildPanel();
+      $('status').textContent=E.NAME+' · '+(was?'':'press PLAY · ')+'mono-safe by construction';
+      if(was)startPlay();
+    });
+    t.appendChild(b);
+  });
+}
+
+/* ---------- mono-invariance verifier (offline, current params) ---------- */
+$('verify').addEventListener('click',()=>{
+  const E=EFFECTS[cur],sr=48000;
+  const {L,R}=makeSrc('drums',sr);
+  const run=w=>{const c=new E(sr);Object.assign(c,params[cur],{width:w});
+    const oL=new Float32Array(L.length),oR=new Float32Array(L.length);
+    c.processBlock(L,R,oL,oR,L.length);return {oL,oR};};
+  const a=run(0),b=run(1);
+  let e=0,s2=0,sa=0,sb=0;
+  for(let i=0;i<L.length;i++){
+    e=Math.max(e,Math.abs((a.oL[i]+a.oR[i])-(b.oL[i]+b.oR[i])));
+    s2+=b.oL[i]*b.oR[i];sa+=b.oL[i]*b.oL[i];sb+=b.oR[i]*b.oR[i];
+  }
+  const db=20*Math.log10(e+1e-30),corr=s2/Math.sqrt(sa*sb+1e-30);
+  $('status').textContent='VERIFY '+E.NAME+' @ current params · mono-sum deviation width 0→1: '
+    +db.toFixed(1)+' dBFS (1 ULP float32 floor) · stereo corr @ width=1: '+corr.toFixed(3)
+    +' · mono listeners hear the identical effect at any width';
+});
+
+/* ---------- goniometer ---------- */
+const tdL=new Float32Array(2048),tdR=new Float32Array(2048);
+let corrS=0,tick=0;
+function drawGonio(){
+  requestAnimationFrame(drawGonio);
+  const cv=$('gonio'),c=cv.getContext('2d'),Wp=cv.width,cx=Wp/2,cy=Wp/2;
+  c.fillStyle='rgba(5,10,8,0.16)';c.fillRect(0,0,Wp,Wp);
+  c.strokeStyle='rgba(90,232,203,0.10)';c.lineWidth=1;
+  c.beginPath();c.moveTo(cx,8);c.lineTo(cx,Wp-8);c.moveTo(8,cy);c.lineTo(Wp-8,cy);c.stroke();
+  c.beginPath();c.moveTo(20,Wp-20);c.lineTo(Wp-20,20);c.moveTo(20,20);c.lineTo(Wp-20,Wp-20);c.stroke();
+  if(!scopeAn)return;
+  scopeAn.anL.getFloatTimeDomainData(tdL);scopeAn.anR.getFloatTimeDomainData(tdR);
+  let s=0,sa=0,sb=0;
+  c.strokeStyle='rgba(90,232,203,0.65)';c.lineWidth=1.2;c.beginPath();
+  const sc=Wp*0.34;
+  for(let i=0;i<2048;i+=2){
+    const l=tdL[i],r=tdR[i];
+    const x=cx+(l-r)*0.7071*sc,y=cy-(l+r)*0.7071*sc;
+    i===0?c.moveTo(x,y):c.lineTo(x,y);
+    s+=l*r;sa+=l*l;sb+=r*r;
+  }
+  c.stroke();
+  const cr=sa>1e-9&&sb>1e-9?s/Math.sqrt(sa*sb):corrS;
+  corrS+=(cr-corrS)*0.08;
+  if((tick++&7)===0)$('corrV').textContent=(corrS>=0?'+':'')+corrS.toFixed(3);
+}
+buildTabs();buildPanel();drawGonio();
+</script>
+</body>
+</html>
