@@ -47,7 +47,7 @@ Unchanged from v0.1 and validated (recovers a 5 ms inter-channel offset to sub-s
 | Sub-sample resolution | Parabolic peak interpolation, ≤ 0.05 samples |
 | Delay line | Constant path: cubic fractional delay. Drifting path: **time-varying cubic fractional delay** on per-sample linear interpolation of the track |
 | Stability policy | Track span < 1 sample collapses to the constant-lag path (preserves null behavior exactly); no confident window anywhere → passthrough |
-| Validated | 0→8 ms linear drift recovered: corr 0.349 → 0.917, track span 6.6 ms |
+| Validated | 0→8 ms linear drift recovered: corr 0.349 → 0.927, track span 6.6 ms |
 
 ---
 
@@ -79,7 +79,7 @@ All leaky estimators are initialized from pass-1 statistics; per-bin rotation st
 **Rotation rule (cross-spectrum target).** Instantaneous phases never steer the rotation. Per bin:
 
 - Leaky cross-/auto-spectra (τ = 80 ms) update with **SNR-adaptive rate**: `α_eff = α · smoothstep(2, 8, power/floor[k])`. Silent or near-floor bins freeze their estimates entirely.
-- Steering estimates (gate coherence and Δ) blend the live leaky state with a **segment prior** (35 %), crossfaded to the neighboring segment only within ±0.25 s of the detected boundary — never center-to-center, which was measured to smear the transition. Seeding at frame 0 uses segment 0. Validated: a mid-file in-phase→anti-phase flip, invisible to whole-file statistics (global coherence ≈ 0), is detected as exactly 2 segments and recovers 0.037 → 0.745.
+- Steering estimates (gate coherence and Δ) blend the live leaky state with a **segment prior** (35 %), crossfaded to the neighboring segment only within ±0.25 s of the detected boundary — never center-to-center, which was measured to smear the transition. Seeding at frame 0 uses segment 0. Validated: a mid-file in-phase→anti-phase flip, invisible to whole-file statistics (global coherence ≈ 0), is detected as exactly 2 segments and recovers 0.037 → 0.747.
 - The inter-channel phase offset is tracked as a **continuous (unwrapped) angle** `Δc[k]` following `∠S_LR` — complex-domain smoothing has no wrap discontinuity, and per-bin unwrapping keeps the applied rotation branch-stable at the ±π boundary.
 - Applied rotation is the **symmetric split**: `rot_L = −Δc/2 · amt`, `rot_R = +Δc/2 · amt`, with `amt = gate(C) · Strength · autoS[band]` and gate = smoothstep(0.25, 0.6) on magnitude-squared coherence.
 - **Circular slew limiting**: rotation angles slew along the shortest arc, ≤ π rad per 20 ms. (Linear slew on a circular quantity is a verified failure mode — see §9.)
@@ -110,7 +110,7 @@ Heavily rotated renders (rotation-weighted magnitude fraction > 2 %) get one spe
 
 ### 4.6 Dual-resolution HF path
 
-Heavily rotated renders additionally run the whole (stage-1-aligned) signal through the **causal short-window core** (512-pt, hop 128 — the same `LiveCore` that powers live mode), warmed by one full preliminary pass over the file. A zero-phase complementary FFT crossover (1.8–3.5 kHz) takes LF from the long-window render and HF from the short engine — LF phase resolution and HF transient handling simultaneously. Adoption-guarded like the consistency pass (output correlation within 0.01); skipped entirely on transparent/null paths. Validated: drift test improved 0.917 → 0.931.
+Heavily rotated renders additionally run the whole (stage-1-aligned) signal through the **causal short-window core** (512-pt, hop 128 — the same `LiveCore` that powers live mode), warmed by one full preliminary pass over the file. A zero-phase complementary FFT crossover (1.8–3.5 kHz) takes LF from the long-window render and HF from the short engine — LF phase resolution and HF transient handling simultaneously. Adoption-guarded like the consistency pass (output correlation within 0.01); skipped entirely on transparent/null paths. Validated: drift test improved 0.919 → 0.927.
 
 ### 4.7 Measured final verdict
 
@@ -129,7 +129,7 @@ Psychoacoustically mapped: per bin, `g = 1 + w(f)·sin(min(|Δc|, π/2))·amt` w
 | **Strength** | 0–100 % | 100 % | Ceiling on `amt`; interpolates rotation geodesically. With auto-strength active, 100 % on clean material is still transparent. |
 | Mono audition | toggle | off | (L+R)/2 on both outputs, post-processing; goniometer follows (trace collapses to mid axis) |
 | Mode switch | STUDIO / LIVE | STUDIO | Top of the faceplate; LIVE runs the causal core with Learn/Freeze and sample-loop or microphone input |
-| Live window | 512 · TIGHT / 1024 · HQ | 512 | 8.0 vs 18.7 ms measured; bass-mono crossover ~150 vs ~90 Hz; engine rebuilt seamlessly on toggle |
+| Live window | 512 · TIGHT / 1024 · HQ | 512 | 10.7 vs 21.3 ms latency (exactly W, constant across host block sizes); bass-mono crossover fixed at 180 Hz for both; engine rebuilt seamlessly on toggle |
 | A/B monitoring | toggle | original | **Loudness-matched**: processed side gain-compensated to the original's stereo RMS (±6 dB clamp) |
 | Export | button | — | 16-bit stereo WAV render of the studio output |
 | Bypass | toggle | off | Latency-compensated |
@@ -142,7 +142,7 @@ Metering: pre/post correlation (±1, 300 ms ballistics), detected lag readout, m
 
 | Item | Spec |
 |---|---|
-| Latency (streaming build) | 20 ms (stage-1 lookahead) + W samples ≈ **62.7 ms @ 48 kHz**; hop density does not add latency |
+| Latency (streaming build) | 20 ms (stage-1 lookahead) + W samples ≈ **62.7 ms @ 48 kHz**; hop density does not add latency. The live core alone is exactly W (10.7 ms at 512). |
 | CPU (streaming) | ≤ 4 % of one core @ 48 kHz (2× frame rate and 2× FFT size vs v0.1; 4 FFTs of 2·W per hop) |
 | Offline throughput | Prototype reference: ≈ 0.4× realtime in JS; native target ≥ 10× realtime |
 | Determinism | Two-pass render is exactly reproducible; verified identical across runs |
@@ -168,7 +168,7 @@ Source/dsp/
 Two operating modes sharing the identical DSP chain:
 
 - **Offline render / ARA-style:** true two-pass, exactly the prototype.
-- **Live streaming (implemented in the prototype as `LiveCore`):** **selectable window** — 512-pt (TIGHT, 8.0 ms measured latency) or 1024-pt (HQ, 18.7 ms measured with 128-sample host quanta) — √Hann, hop W/4 (75 % overlap); I/O runs through a staging FIFO so any host block size works. The forced bass-mono crossover scales with window and sample rate (180 Hz · 512/W · sr/48k): ~150 Hz at 512, ~90 Hz at 1024 — the HQ window buys measurable phase down an octave at the cost of ~11 ms. Leaky-only estimators (τ = 80 ms) with the identical cross-spectrum rotation core, circular slew, and psychoacoustic width; below ~150 Hz phase is not measured at all — a **forced bass-mono crossover** (120–180 Hz blend) guarantees LF compatibility where a short window cannot resolve phase. Learn/Freeze toggles estimator updates; bypass is latency-matched and click-free (10 ms ramps). Runs as an AudioWorklet (ScriptProcessor fallback) fed by the loaded sample or live microphone input. Validated headless in 128-sample quanta: anti-phase −1.000 → 0.986 (512) / 0.988 (1024), identical-channel null −122.9 dBFS at both windows, bit-identical determinism. The same class is reused verbatim as the offline dual-resolution HF path — one causal core, two duties, which is precisely the code-sharing shape the JUCE build should adopt.
+- **Live streaming (implemented in the prototype as `LiveCore`):** **selectable window** — 512-pt (TIGHT, 10.7 ms latency) or 1024-pt (HQ, 21.3 ms) — √Hann, hop W/4 (75 % overlap); I/O runs through a staging FIFO, primed with `hop` zeros so the latency is exactly W for **any** host block size and the output is bit-identical across quanta from 32 to 8192 samples. The forced bass-mono crossover is a fixed 180 Hz at both windows and every sample rate; it is switchable via `bassMono`, because collapsing bass unconditionally also collapses genuinely decorrelated bass (it pulled the suite's own `wide` case from 0.288 to 0.606; with it off the rotation path alone leaves that material at 0.291). Leaky-only estimators (τ = 80 ms) with the identical cross-spectrum rotation core, circular slew, and psychoacoustic width; below ~150 Hz phase is not measured at all — a **forced bass-mono crossover** (120–180 Hz blend) guarantees LF compatibility where a short window cannot resolve phase. Learn/Freeze toggles estimator updates; bypass is latency-matched and click-free (10 ms ramps). Runs as an AudioWorklet (ScriptProcessor fallback) fed by the loaded sample or live microphone input. Validated headless in 128-sample quanta: anti-phase −1.000 → 0.986 (512) / 0.988 (1024), identical-channel null −122.9 dBFS at both windows, bit-identical determinism. The same class is reused verbatim as the offline dual-resolution HF path — one causal core, two duties, which is precisely the code-sharing shape the JUCE build should adopt.
 
 Build order: StftEngine + null test → Analyzer → PhaseUnifier on test signals → PreAligner → WidthRestorer → UI.
 
@@ -189,11 +189,11 @@ Build order: StftEngine + null test → Analyzer → PhaseUnifier on test signal
 | Ceiling-limited coherent material (allpass noise) | Refinement measurably improves then stops on no-progress | 0.935 → 0.946, corr 0.994 ✔ |
 | Coherent + independent-noise blend | Converges toward coherence ceiling, no destructive verdict | 0.634 → 0.645 (ceiling ≈ 0.74) ✔ |
 | Anti-phase @ 25 % Strength | Destructive warning fires (honest low-strength reporting) | 24 bands flagged ✔ |
-| Linearly drifting delay (0→8 ms) | Lag track follows; corr ≥ 0.9 | 0.349 → 0.917, span 6.6 ms ✔ |
+| Linearly drifting delay (0→8 ms) | Lag track follows; corr ≥ 0.9 | 0.349 → 0.927, span 6.6 ms ✔ |
 | Mid-file phase-relationship flip | Segment priors recover what whole-file stats cannot (global C ≈ 0) | 0.037 → 0.720 ✔ |
 | Consistency pass on null/transparent paths | Never fires | ✔ (−122.9 dBFS nulls preserved) |
 | Live core: anti-phase noise | corr ≥ 0.98 through the causal engine | 0.986 (512-pt) / 0.988 (1024-pt) ✔ |
-| Live core: measured latency | 512: W−hop = 8.0 ms; 1024: W−hop+staging = 18.7 ms | ✔ (empirical lag detection) |
+| Live core: measured latency | exactly W: 512 = 10.7 ms, 1024 = 21.3 ms, identical at every host block size from 32 to 8192 | ✔ (empirical lag detection) |
 | Live core: identical channels | Null ≤ −120 dBFS (bass-mono of identical = identity) | −122.9 dBFS ✔ |
 | Dual-res path on null/transparent paths | Never fires | ✔ |
 
@@ -206,7 +206,7 @@ Build order: StftEngine + null test → Analyzer → PhaseUnifier on test signal
 5. Refinement levers must be verified to have travel — coherence-gate relaxation alone moved band correlation by < 0.001 (gates already saturate near 1 on real material); locking-off and slew relaxation are the levers that measurably act.
 6. The safety verdict must not count statistical flutter — incoherent bands fluctuate around 0 correlation on finite samples; the destructive threshold sits at −0.1.
 7. Post-processing "enhancement" stages must be adoption-guarded against the primary objective — the consistency pass measurably improves some renders and measurably harms others (phase-flip boundaries); it is kept only when output correlation survives within 0.01. The same guard now covers the dual-resolution combine.
-8. Segment priors must crossfade in a fixed window around the detected boundary — interpolating between segment centers smears the transition across the whole inter-center span (measured: 0.709 vs 0.745 on the flip test) and gets worse the better the boundary detection is.
+8. Segment priors must crossfade in a fixed window around the detected boundary — interpolating between segment centers smears the transition across the whole inter-center span (measured: 0.709 vs 0.747 on the flip test) and gets worse the better the boundary detection is.
 
 ---
 

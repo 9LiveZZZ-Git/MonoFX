@@ -194,7 +194,18 @@ function workletSrcFor(E){
 'process(inputs,outputs){const i=inputs[0],o=outputs[0];'+
 'if(!o||!o[0])return true;'+
 'if(!i||!i[0]){o[0].fill(0);if(o[1])o[1].fill(0);return true;}'+
-'this.core.processBlock(i[0],i[1]||i[0],o[0],o[1]||o[0],i[0].length);return true;}}'+
+// On a mono bus o[1] is undefined. Passing o[0] as BOTH outputs made the core
+// write outL=m+s and then overwrite it with outR=m-s, so the host received m-s
+// rather than the mono sum m. Since every core synthesises S from the mid path,
+// s is non-zero even for a mono input: that subtracted the effect's own
+// decorrelated content from the mono signal — the precise failure this suite
+// is built to make impossible. Render to scratch and sum to m.
+'var n=o[0].length,iL=i[0],iR=i[1]||i[0];'+
+'if(o[1]){this.core.processBlock(iL,iR,o[0],o[1],n);return true;}'+
+'if(!this.mL||this.mL.length<n){this.mL=new Float32Array(n);this.mR=new Float32Array(n);}'+
+'this.core.processBlock(iL,iR,this.mL,this.mR,n);'+
+'for(var k=0;k<n;k++)o[0][k]=0.5*(this.mL[k]+this.mR[k]);'+
+'return true;}}'+
 '\nregisterProcessor("'+E.PROC+'",P);';
 }
 async function buildNode(){
@@ -356,10 +367,14 @@ function buildTabs(){
 
 /* ---------- mono-invariance verifier (offline, current params) ---------- */
 $('verify').addEventListener('click',()=>{
-  const E=EFFECTS[cur],sr=48000;
+  const E=EFFECTS[cur],sr=actx?actx.sampleRate:48000;   // verify what is actually playing
   const {L,R}=makeSrc('drums',sr);
+  // float64, matching tests/monofx-cores.test.js. The mid path has to be
+  // width-free as ARITHMETIC; a float32 render can only ever show the output
+  // rounding floor, so it cannot tell a healthy core from a broken one.
   const run=w=>{const c=new E(sr);Object.assign(c,params[cur],{width:w});
-    const oL=new Float32Array(L.length),oR=new Float32Array(L.length);
+    if(c.refresh)c.refresh();
+    const oL=new Float64Array(L.length),oR=new Float64Array(L.length);
     c.processBlock(L,R,oL,oR,L.length);return {oL,oR};};
   const a=run(0),b=run(1);
   let e=0,s2=0,sa=0,sb=0;
@@ -367,10 +382,19 @@ $('verify').addEventListener('click',()=>{
     e=Math.max(e,Math.abs((a.oL[i]+a.oR[i])-(b.oL[i]+b.oR[i])));
     s2+=b.oL[i]*b.oR[i];sa+=b.oL[i]*b.oL[i];sb+=b.oR[i]*b.oR[i];
   }
-  const db=20*Math.log10(e+1e-30),corr=s2/Math.sqrt(sa*sb+1e-30);
-  $('status').textContent='VERIFY '+E.NAME+' @ current params · mono-sum deviation width 0→1: '
-    +db.toFixed(1)+' dBFS (1 ULP float32 floor) · stereo corr @ width=1: '+corr.toFixed(3)
-    +' · mono listeners hear the identical effect at any width';
+  // A verdict, not a sentence. This previously printed "(1 ULP float32 floor) ·
+  // mono listeners hear the identical effect at any width" no matter what it
+  // measured — a core leaking 1% of the width signal into the mid path reported
+  // -41 dBFS under that same reassuring text.
+  const TOL=1e-15;                                      // the regression suite's own tolerance
+  const pass=e<TOL,db=20*Math.log10(e+1e-30),corr=s2/Math.sqrt(sa*sb+1e-30);
+  const el=$('status');
+  el.textContent='VERIFY '+E.NAME+' @ current params · '+(pass?'PASS':'FAIL')
+    +' · mono-sum deviation width 0→1: '+db.toFixed(1)+' dBFS · '
+    +(pass?'float64 rounding floor — the mono sum is width-free'
+          :'ABOVE the '+TOL.toExponential(0)+' tolerance — WIDTH IS LEAKING INTO THE MID PATH')
+    +' · stereo corr @ width=1: '+corr.toFixed(3);
+  el.style.color=pass?'var(--post)':'#e0574a';
 });
 
 /* ---------- goniometer ---------- */

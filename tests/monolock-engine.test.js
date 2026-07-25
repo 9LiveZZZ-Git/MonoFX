@@ -97,13 +97,33 @@ console.log('\nTRANSPARENCY (already-mono-compatible input must be untouched)');
 for(const st of [0,0.5,1]){
   const Ln=pink(N,5);
   const z=await processAll(Ln,Ln,SR,st,()=>{});
-  let e=0;for(let i=8192;i<N-8192;i++)e=Math.max(e,Math.abs(z.oL[i]-Ln[i]));
-  check('null @ strength '+st,e<1e-5&&!z.dualRes,
-    db(e).toFixed(1)+' dBFS, enhancement stages '+(z.dualRes||z.glApplied?'FIRED':'idle'));
+  // The WHOLE buffer, including both edges. Restricting this to 8192..n-8192 hid
+  // an overlap-add head ramp that attenuated the first 37 ms of every render by
+  // up to 44 dB and left sample 0 silent.
+  let e=0;for(let i=0;i<N;i++)e=Math.max(e,Math.abs(z.oL[i]-Ln[i]));
+  // Assert BOTH enhancement stages are idle. The old assertion checked only
+  // dualRes while the printed detail also reported glApplied, so a consistency
+  // pass firing on already-compatible input would have gone unnoticed.
+  check('null @ strength '+st,e<1e-5&&!z.dualRes&&!z.glApplied,
+    db(e).toFixed(1)+' dBFS whole-buffer, enhancement stages '+(z.dualRes||z.glApplied?'FIRED':'idle'));
+}
+{ // the head and tail specifically, since that is where the OLA bug lived
+  const Ln=pink(N,5);
+  const z=await processAll(Ln,Ln,SR,1,()=>{});
+  let head=0,tail=0;
+  for(let i=0;i<4096;i++)head=Math.max(head,Math.abs(z.oL[i]-Ln[i]));
+  for(let i=N-4096;i<N;i++)tail=Math.max(tail,Math.abs(z.oL[i]-Ln[i]));
+  check('render edges are gain-correct (no OLA head/tail ramp)',head<1e-5&&tail<1e-5,
+    'head '+db(head).toFixed(1)+' dBFS, tail '+db(tail).toFixed(1)+' dBFS');
 }
 
 console.log('\nLIVE CORE (causal, host quantum = 128)');
-for(const [W,latMs,tgt] of [[512,8.0,0.98],[1024,18.7,0.98]]){
+// Latency is now exactly W samples: (W-hop) of STFT lookahead plus the hop
+// samples primed into the output FIFO. It used to be W-hop plus a variable
+// priming term, so the figure moved with the host block size (384..480 at
+// W=512) — the previously documented 18.7 ms for W=1024 was an artifact of this
+// suite happening to use a 128-sample quantum.
+for(const [W,latMs,tgt] of [[512,512/SR*1000,0.98],[1024,1024/SR*1000,0.98]]){
   const L=pink(SR*3,9),R=new Float32Array(SR*3);
   for(let i=0;i<R.length;i++)R[i]=-L[i];
   const o=streamLive(W,L,R,128);
@@ -113,8 +133,61 @@ for(const [W,latMs,tgt] of [[512,8.0,0.98],[1024,18.7,0.98]]){
   const lag=findLatency(z.oL,L,3*W);
   let e=0;for(let i=lag+4096;i<L.length-4096;i++)e=Math.max(e,Math.abs(z.oL[i]-L[i-lag]));
   check(W+'-pt: identical-channel null',e<1e-5,db(e).toFixed(1)+' dBFS');
-  check(W+'-pt: latency == '+latMs+' ms',Math.abs(lag/SR*1000-latMs)<0.6,
-    lag+' smp = '+(lag/SR*1000).toFixed(1)+' ms');
+  check(W+'-pt: latency == '+latMs.toFixed(1)+' ms',Math.abs(lag/SR*1000-latMs)<0.6,
+    lag+' smp = '+(lag/SR*1000).toFixed(1)+' ms, reported '+new LiveCore(SR,W).latencySamples());
+}
+
+/* Block-size independence and a CONSTANT latency, for LiveCore this time. This
+   is invariant 4, and it was only ever checked for the MonoFX cores. The FIFO
+   used to inject zeros mid-stream at block sizes incommensurate with hop
+   (441/735/882 — every 44.1 kHz buffer) and to overwrite unread audio outright
+   above W*4, which turned 76% of an 8192-sample render into silence. */
+for(const W of [512,1024]){
+  const n=SR,L=pink(n,9);
+  const run=Q=>{
+    const c=new LiveCore(SR,W);
+    const oL=new Float32Array(n);
+    const tL=new Float32Array(Q),tR=new Float32Array(Q),aL=new Float32Array(Q),aR=new Float32Array(Q);
+    for(let off=0;off<n;off+=Q){
+      for(let i=0;i<Q;i++){const s=off+i;tL[i]=tR[i]=s<n?L[s]:0;}
+      c.processBlock(tL,tR,aL,aR,Q);
+      for(let i=0;i<Q;i++){const d=off+i;if(d<n)oL[d]=aL[i];}
+    }
+    return oL;
+  };
+  const ref=run(128);
+  let worst=0,at=0;
+  for(const Q of [32,64,100,128,256,333,441,480,512,735,882,1000,1024,1470,2048,4096,8192]){
+    const o=run(Q);
+    let e=0;for(let i=6000;i<n-6000;i++)e=Math.max(e,Math.abs(ref[i]-o[i]));
+    if(e>worst){worst=e;at=Q;}
+  }
+  check(W+'-pt: block-size independent (17 quanta, 32..8192)',worst===0,
+    worst===0?'bit-identical at every block size':'differs by '+worst.toExponential(2)+' at Q='+at);
+}
+
+/* The live path must leave genuinely decorrelated material alone, the same way
+   the offline engine does. It did not: forced bass-mono is unconditional, so it
+   collapsed wide bass along with damaged bass and pulled the suite's own "wide"
+   case from 0.288 to 0.606. The rotation path itself was never the problem —
+   with bassMono off it lands at 0.291. The feature is now switchable. */
+{
+  const t=makeTest('wide',SR),n2=t.L.length;
+  const run=(W,bm)=>{
+    const c=new LiveCore(SR,W); c.strength=1; c.bassMono=bm;
+    const Q=128,oL=new Float32Array(n2),oR=new Float32Array(n2);
+    const tL=new Float32Array(Q),tR=new Float32Array(Q),aL=new Float32Array(Q),aR=new Float32Array(Q);
+    const push=cap=>{for(let off=0;off<n2;off+=Q){
+      for(let i=0;i<Q;i++){const s=off+i;tL[i]=s<n2?t.L[s]:0;tR[i]=s<n2?t.R[s]:0;}
+      c.processBlock(tL,tR,aL,aR,Q);
+      if(cap)for(let i=0;i<Q;i++){const d=off+i;if(d<n2){oL[d]=aL[i];oR[d]=aR[i];}}}};
+    push(false);c.resetStreams();push(true);
+    return corr(oL.subarray(8000,n2-8000),oR.subarray(8000,n2-8000));
+  };
+  const pre=corr(t.L.subarray(8000,n2-8000),t.R.subarray(8000,n2-8000));
+  const c512=run(512,0),c1024=run(1024,0);
+  check('wide material stays wide (bassMono off)',c512<0.5&&c1024<0.5,
+    pre.toFixed(3)+' -> '+c512.toFixed(3)+' (512) / '+c1024.toFixed(3)+' (1024)');
 }
 {
   const L=pink(SR*2,3),R=pink(SR*2,4);

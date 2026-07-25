@@ -17,7 +17,7 @@ not exist yet — see `CLAUDE.md`.
 ## Quick start
 
 ```bash
-npm test          # 60 assertions across both suites (~30 s)
+npm test          # 80 assertions across both suites (~60 s)
 npm run serve     # then open http://localhost:8000/prototypes/
 ```
 
@@ -54,17 +54,25 @@ tools/
 
 ## Current measurements
 
-MonoFX cores (all four): mono sum is bit-exact width-invariant in float64;
-float32 deviation is 1 ULP (−138 to −144 dBFS). `mix=0` bit-transparent,
-block-size independent, deterministic, stable at maximum settings.
+MonoFX cores (all four): the mono sum is width-invariant to 1–2 ULP of float64
+output rounding (−307 to −319 dB); the *mid path itself* is bit-exact, but the
+cores return L and R separately and `fl(m+s)+fl(m−s)` is not exactly `2m`.
+float32 deviation is 1 ULP (−141 to −144.5 dBFS). `mix=0` bit-transparent,
+block-size independent, deterministic, stable at maximum settings on sustained
+material, recovers from NaN/Inf input, and WIDTH widens without panning the
+image (worst L/R imbalance 0.08–0.99 dB).
 
 MonoLock offline (strength 1.0): 5 ms delay 0.197 → 1.000 · polarity inversion
 −1.000 → 0.992 · broadband rotation 0.455 → 0.993 · decorrelated material left
-transparent · 8 ms drift 0.349 → 0.931 · mid-file polarity flip 0.037 → 0.745 ·
-identical channels null at −122.9 dBFS at every strength.
+transparent · 8 ms drift 0.349 → 0.927 · mid-file polarity flip 0.037 → 0.747 ·
+identical channels null at −122.9 dBFS across the *whole* buffer at every
+strength, edges included.
 
-MonoLock live: 512-pt = 8.0 ms latency, anti-phase −1.000 → 0.986 · 1024-pt =
-18.7 ms, −1.000 → 0.988 · both null identical channels at −122.9 dBFS.
+MonoLock live: latency is exactly the window length and does not vary with the
+host block size — 512-pt = 512 samples (10.7 ms), 1024-pt = 1024 samples
+(21.3 ms). Anti-phase recovery −1.000 → 0.986 (512) and → 0.988 (1024); both
+null identical channels at −122.9 dBFS; both bit-identical across host block
+sizes from 32 to 8192 samples.
 
 ## Why the numbers are stated everywhere
 

@@ -19,10 +19,15 @@ class ChorusCore{
     this.len=len;this.mask=len-1;
     this.buf=new Float64Array(len);this.wp=0;
     this.ph=[0,2.094,4.189];this.rMul=[1,0.87,1.13];this.base=[0.008,0.014,0.022];
+    this.v=[0,0,0];   // per-sample scratch, hoisted out of processBlock
+    this.pms=0;this.pmm=0;   // image-balance estimator
     this.bypass=false;this.mono=false;this.bypassMix=0;this.monoMix=0;
   }
   resetStreams(){
-    this.buf.fill(0);this.wp=0;this.ph=[0,2.094,4.189];
+    // Write into the existing array rather than replacing it: resetStreams may be
+    // wired to a host transport callback, and that must not allocate.
+    this.buf.fill(0);this.wp=0;this.pms=0;this.pmm=0;
+    this.ph[0]=0;this.ph[1]=2.094;this.ph[2]=4.189;
     this.bypassMix=this.bypass?1:0;this.monoMix=this.mono?1:0;
   }
   read(d){
@@ -33,22 +38,36 @@ class ChorusCore{
   }
   processBlock(inL,inR,outL,outR,N){
     const sr=this.sr,stp=1/(0.010*sr);
-    const modS=(0.0005+this.depth*0.004)*sr;   // 0.5–4.5 ms sweep
-    const mix=this.mix,wS=this.width*mix*0.5,vx=this.voxmix;
+    // Clamp: parameters arrive unvalidated via Object.assign from a postMessage.
+    const rate=Math.min(20,Math.max(0,this.rate)),depth=Math.min(1,Math.max(0,this.depth)),
+          mix=Math.min(1,Math.max(0,this.mix)),width=Math.min(1,Math.max(0,this.width)),
+          vx=Math.min(1,Math.max(0,this.voxmix));
+    const modS=(0.0005+depth*0.004)*sr;        // 0.5–4.5 ms sweep
+    const wS=width*mix*0.5;
+    const bal=1-Math.exp(-1/(0.050*sr));       // 50 ms image-balance estimator
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
       this.buf[this.wp]=M;
-      const v=[0,0,0];
+      const v=this.v;
       for(let j=0;j<3;j++){
-        const d=Math.max(4,this.base[j]*sr+modS*Math.sin(this.ph[j]));
-        this.ph[j]+=2*Math.PI*this.rate*this.rMul[j]/sr;
+        const d=Math.min(this.len-4,Math.max(4,this.base[j]*sr+modS*Math.sin(this.ph[j])));
+        this.ph[j]+=2*Math.PI*rate*this.rMul[j]/sr;
         if(this.ph[j]>2*Math.PI)this.ph[j]-=2*Math.PI;
         v[j]=this.read(d);
       }
       this.wp=(this.wp+1)&this.mask;
       const ens=(v[0]+v[1]*vx+v[2])/(2+vx);
       const mOut=M*(1-mix)+mix*0.5*(M+ens)*1.4142; // mono path: width-independent
-      const sOut=S+wS*(v[0]-v[2]);
+      const sW=wS*(v[0]-v[2]);                     // shimmer: voice 1 minus voice 3
+      // Image-balance corrector — see monofx-phaser.js. Voices 1 and 3 are also in
+      // the mid ensemble, and their base delays differ (8 vs 22 ms), so E[m*sW]
+      // is non-zero and WIDTH panned the image by up to 1.7 dB. Removing the
+      // projection onto the mid cannot alter the mono sum (2m) and is identically
+      // zero at mix=0, where sW is zero.
+      const al=this.pmm>1e-20?Math.min(4,Math.max(-4,this.pms/this.pmm)):0;
+      const sOut=S*(1-mix)+sW-al*mOut;
+      this.pms+=bal*(mOut*sW-this.pms);
+      this.pmm+=bal*(mOut*mOut-this.pmm);
       const bT=this.bypass?1:0,mT=this.mono?1:0;
       this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
       this.monoMix+=Math.max(-stp,Math.min(stp,mT-this.monoMix));

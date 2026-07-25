@@ -72,9 +72,15 @@ click-free without needing a host-level crossfade.
 ### Phaser
 Six cascaded first-order allpass sections, swept by one LFO, **shared by both
 channels** — both ears get identical notch frequencies, so the notches are
-already mono-safe. Feedback is taken around the M chain only. Width comes from
-the *difference between stage 3 and stage 6 output* placed in S: a genuinely
-decorrelated signal with the phaser's spectral character that vanishes on sum.
+already mono-safe. Feedback is taken around the M chain only, DC-blocked (a
+first-order allpass has `H(1)=+1`, so the cascade is zero-phase at DC and raw
+feedback boosted it by `1/(1-fb)`), and the chain input is scaled by `(1-fb)` so
+the resonant peak stays at unity. Width comes from the *difference between stage
+1 and stage 4 output* placed in S: a genuinely decorrelated signal with the
+phaser's spectral character that vanishes on sum. It must not involve stage 6 —
+the mid path already carries stage 6, so a side term containing it is correlated
+with the mid and WIDTH pans the image instead of widening it (measured worst
+|L/R imbalance| over a 54-point grid: stages 3&6 = 4.58 dB, stages 1&4 = 0.63 dB).
 
 ### Delay
 One shared delay time, cubic-interpolated read with a 50 ms glide (so time

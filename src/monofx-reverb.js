@@ -19,35 +19,62 @@ class ReverbCore{
     for(const p of ReverbCore.PARAMS)this[p.id]=p.def;
     this.baseMs=[29.7,37.1,41.1,43.7,53.3,59.5,61.3,68.9];
     this.bufs=[];this.ptrs=new Int32Array(8);this.lens=new Int32Array(8);
-    for(let i=0;i<8;i++)this.bufs.push(new Float64Array(Math.ceil(0.080*2.2*sr)));
     this.lp=new Float64Array(8);this.g=new Float64Array(8);
-    let pl=1;while(pl<0.15*sr)pl<<=1;
-    this.preBuf=new Float64Array(pl);this.preMask=pl-1;this.preW=0;
-    this._size=-1;this._decay=-1;
+    this.l=new Float64Array(8);   // per-sample scratch, hoisted out of processBlock
+    this.pms=0;this.pmm=0;        // image-balance estimator
+    this._size=-1;this._decay=-1;this._sr=-1;
     this.bypass=false;this.mono=false;this.bypassMix=0;this.monoMix=0;
+    this.alloc();
     this.refresh();
   }
+  // Sized from sr, so it must re-run if the host changes rate. Called from
+  // refresh(), which means a rate change allocates — that is a prepare-time
+  // event, not an audio-thread one. A C++ port does this in prepareToPlay.
+  alloc(){
+    const need=Math.ceil(0.080*2.2*this.sr);
+    if(!this.bufs.length||this.bufs[0].length<need){
+      this.bufs=[];for(let i=0;i<8;i++)this.bufs.push(new Float64Array(need));
+      this.lens.fill(0);this.ptrs.fill(0);this.lp.fill(0);
+    }
+    let pl=1;while(pl<0.15*this.sr)pl<<=1;
+    if(!this.preBuf||this.preBuf.length<pl){
+      this.preBuf=new Float64Array(pl);this.preMask=pl-1;this.preW=0;
+    }
+  }
   refresh(){
-    if(this._size===this.size&&this._decay===this.decay)return;
-    this._size=this.size;this._decay=this.decay;
+    if(this._size===this.size&&this._decay===this.decay&&this._sr===this.sr)return;
+    if(this._sr!==this.sr)this.alloc();
+    this._size=this.size;this._decay=this.decay;this._sr=this.sr;
     for(let i=0;i<8;i++){
-      const len=Math.max(64,Math.round(this.baseMs[i]*0.001*this.size*this.sr));
-      if(len!==this.lens[i]){this.lens[i]=len;this.bufs[i].fill(0);this.ptrs[i]=0;}
-      this.g[i]=Math.pow(10,-3*len/(this.decay*this.sr));
+      // Clamp to the allocated line. Without it, size>2.55 walks the pointer past
+      // the end, and out-of-range typed-array reads yield undefined -> NaN forever.
+      const len=Math.min(this.bufs[i].length,
+        Math.max(64,Math.round(this.baseMs[i]*0.001*this.size*this.sr)));
+      // Do NOT zero the line on a length change. SIZE is a normally-automated
+      // parameter, and wiping the buffer dropped the entire tail to digital
+      // silence for the whole drag. Re-pointing is a far smaller artefact.
+      if(len!==this.lens[i]){this.lens[i]=len;if(this.ptrs[i]>=len)this.ptrs[i]=0;}
+      this.g[i]=Math.pow(10,-3*len/(Math.max(1e-3,this.decay)*this.sr));
     }
   }
   resetStreams(){
     for(let i=0;i<8;i++){this.bufs[i].fill(0);this.ptrs[i]=0;}
-    this.lp.fill(0);this.preBuf.fill(0);this.preW=0;
+    this.lp.fill(0);this.preBuf.fill(0);this.preW=0;this.pms=0;this.pmm=0;
     this.bypassMix=this.bypass?1:0;this.monoMix=this.mono?1:0;
   }
   processBlock(inL,inR,outL,outR,N){
     this.refresh();
     const sr=this.sr,stp=1/(0.010*sr);
-    const lpc=1-Math.exp(-2*Math.PI*this.damp/sr);
-    const preD=Math.max(1,Math.round(this.pre*0.001*sr));
-    const mix=this.mix,wS=this.width*mix*1.5;
-    const l=new Float64Array(8);
+    // Clamp: parameters arrive unvalidated via Object.assign from a postMessage.
+    // A negative damp makes lpc negative and the one-pole diverges — a damp of
+    // -14000 ran the output away to -2.8e8.
+    const damp=Math.min(0.49*sr,Math.max(20,this.damp));
+    const mix=Math.min(1,Math.max(0,this.mix)),width=Math.min(1,Math.max(0,this.width));
+    const lpc=1-Math.exp(-2*Math.PI*damp/sr);
+    const preD=Math.min(this.preMask,Math.max(1,Math.round(Math.max(0,this.pre)*0.001*sr)));
+    const wS=width*mix*1.5;
+    const bal=1-Math.exp(-1/(0.050*sr)); // 50 ms image-balance estimator
+    const l=this.l;
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
       this.preBuf[this.preW]=M;
@@ -67,7 +94,18 @@ class ReverbCore{
       }
       mT*=0.185;sT*=0.185;
       const mOut=M*(1-mix)+mix*mT*1.5;  // mono path: width-independent
-      const sOut=S*(1-mix*0.5)+wS*sT;
+      // Same dry law as the mid path. The old (1-mix*0.5) left half the dry SIDE
+      // in the output at mix=1, so a "100% wet" reverb still passed the dry
+      // signal at -6.02 dB — audible as the source reprinting through an aux send.
+      const sW=wS*sT;
+      // Image-balance corrector — see monofx-phaser.js. The all-plus and
+      // alternating-sign taps are orthogonal by construction, so this stays small
+      // here; it is applied for consistency and to hold the image as the line
+      // lengths change. Cannot affect the mono sum (2m); zero at mix=0.
+      const al=this.pmm>1e-20?Math.min(4,Math.max(-4,this.pms/this.pmm)):0;
+      const sOut=S*(1-mix)+sW-al*mOut;
+      this.pms+=bal*(mOut*sW-this.pms);
+      this.pmm+=bal*(mOut*mOut-this.pmm);
       const bT=this.bypass?1:0,mTn=this.mono?1:0;
       this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
       this.monoMix+=Math.max(-stp,Math.min(stp,mTn-this.monoMix));

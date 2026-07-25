@@ -29,6 +29,21 @@ function pinkStereo(n,seed){
   return {L,R};
 }
 
+// Sustained full-scale log sweep. drums() is almost all transient, which hid a
+// 15.4x peak in the phaser's right channel at maximum feedback: the resonance
+// never had time to build. Stability testing needs sustained excitation.
+function sweep(n,sr,f0,f1){
+  const L=new Float32Array(n),R=new Float32Array(n);
+  const a=f0||10,b=f1||20000,k=Math.log(b/a);
+  let ph=0;
+  for(let i=0;i<n;i++){
+    const f=a*Math.exp(k*i/n);
+    ph+=2*Math.PI*f/sr; if(ph>2*Math.PI)ph-=2*Math.PI;
+    L[i]=R[i]=Math.sin(ph);
+  }
+  return {L,R};
+}
+
 function impulse(n,at){
   const L=new Float32Array(n),R=new Float32Array(n);
   L[at||64]=1;R[at||64]=1;
@@ -42,4 +57,4 @@ function corr(a,b){
 }
 const db=x=>20*Math.log10(Math.abs(x)+1e-30);
 
-module.exports={lcg,drums,pinkStereo,impulse,corr,db};
+module.exports={lcg,drums,pinkStereo,sweep,impulse,corr,db};

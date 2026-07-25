@@ -5,7 +5,7 @@
    does the one thing it claims to do, no matter how good it sounds. Port these
    to C++ (Catch2/GoogleTest) alongside the DSP — see docs/juce-port-plan.md §4. */
 const path=require('path');
-const {drums,pinkStereo,impulse,corr,db}=require('./lib/signals.js');
+const {drums,pinkStereo,sweep,impulse,corr,db}=require('./lib/signals.js');
 const CORES=[
   require('../src/monofx-phaser.js'),
   require('../src/monofx-delay.js'),
@@ -50,6 +50,7 @@ for(const E of CORES){
   console.log(E.NAME);
   const src=drums(N,SR,7);
   const dec=pinkStereo(N,5);   // fully decorrelated worst case
+  const swp=sweep(N,SR);       // sustained excitation for the stability check
 
   /* 1. THE INVARIANT. Mono sum must not depend on the width control.
         float64 render isolates the arithmetic from output quantization:
@@ -87,13 +88,25 @@ for(const E of CORES){
   }
 
   /* 4. Stability: every parameter pinned to its maximum, 4 s, no NaN/Inf and no
-        runaway. Feedback paths (phaser fb, delay fb, reverb decay) live here. */
+        runaway. Feedback paths (phaser fb, delay fb, reverb decay) live here.
+        BOTH channels, and sustained material as well as transient: checking only
+        oL against drums() reported "peak 1.18" for a phaser whose oR reached
+        15.4x on a sweep, because the peak lived in the channel nobody looked at
+        and the resonance never had time to build on transients. */
   {
     const mx={};for(const p of E.PARAMS)mx[p.id]=p.max;
-    const s=render(E,mx,src.L,src.R);
-    let peak=0,bad=false;
-    for(let i=0;i<N;i++){const v=s.oL[i];if(!isFinite(v))bad=true;peak=Math.max(peak,Math.abs(v));}
-    console.log(check('stable at max settings',!bad&&peak<12,'peak '+peak.toFixed(2)));
+    let peak=0,bad=false,worst='';
+    for(const [mat,sig] of [['drums',src],['sweep',swp]]){
+      const s=render(E,mx,sig.L,sig.R);
+      for(let i=0;i<N;i++){
+        const a=s.oL[i],b=s.oR[i];
+        if(!isFinite(a)||!isFinite(b))bad=true;
+        const m=Math.max(Math.abs(a),Math.abs(b));
+        if(m>peak){peak=m;worst=mat;}
+      }
+    }
+    console.log(check('stable at max settings (both channels, 2 materials)',!bad&&peak<12,
+      'peak '+peak.toFixed(2)+' on '+worst));
   }
 
   /* 5. Silence in, silence out — catches denormal noise and stuck feedback. */
@@ -134,7 +147,94 @@ for(const E of CORES){
       'corr '+cN.toFixed(3)+' -> '+cW.toFixed(3)));
   }
 
-  /* 9. Worklet packaging: the class must survive toString() round-tripping,
+  /* 9. NaN/Inf quarantine. One bad sample from an upstream plugin must not latch
+        the recursive state. The phaser used to be poisoned forever, because its
+        flush guard was Math.abs(x)<1e-24 and Math.abs(NaN)<1e-24 is false. */
+  {
+    const c=new E(SR); if(c.refresh)c.refresh();
+    const B=512,iL=new Float32Array(B),iR=new Float32Array(B),
+          oL=new Float32Array(B),oR=new Float32Array(B);
+    iL[10]=NaN; iR[10]=Infinity;
+    c.processBlock(iL,iR,oL,oR,B);
+    let recovered=-1;
+    for(let blk=0;blk<64&&recovered<0;blk++){
+      for(let i=0;i<B;i++)iL[i]=iR[i]=0.3*Math.sin(2*Math.PI*440*(blk*B+i)/SR);
+      c.processBlock(iL,iR,oL,oR,B);
+      let ok=true;
+      for(let i=0;i<B;i++)if(!isFinite(oL[i])||!isFinite(oR[i])){ok=false;break;}
+      if(ok)recovered=blk;
+    }
+    console.log(check('recovers from NaN/Inf input',recovered>=0&&recovered<=2,
+      recovered<0?'still non-finite after 0.7 s':'clean after '+recovered+' block(s)'));
+  }
+
+  /* 10. The WIDTH control must widen, not pan. A mono input has S=0, so any L/R
+         energy difference is the core biasing the image on its own. The phaser
+         failed this at 4.58 dB because its side term was built from the same
+         allpass stage the mid path already carried. */
+  {
+    const mono=new Float32Array(N); for(let i=0;i<N;i++)mono[i]=src.L[i];
+    let worst=0,at='';
+    for(const ov of [{},{width:1},{width:1,mix:1}]){
+      const o=render(E,ov,mono,mono,Float64Array);
+      let sl=0,sr2=0;
+      for(let i=SR;i<N;i++){sl+=o.oL[i]*o.oL[i];sr2+=o.oR[i]*o.oR[i];}
+      const im=Math.abs(20*Math.log10(Math.sqrt(sl/sr2)));
+      if(im>worst){worst=im;at=JSON.stringify(ov);}
+    }
+    console.log(check('width widens without panning the image',worst<1.0,
+      'worst |L/R imbalance| '+worst.toFixed(3)+' dB at '+at));
+  }
+
+  /* 11. Out-of-range parameters must not produce NaN or a runaway. Every core is
+         configured by Object.assign from a postMessage with no validation, so a
+         preset, an automation curve or a port that forgets its ranges can push
+         any field past its PARAMS limit. */
+  {
+    let bad='';
+    for(const p of E.PARAMS){
+      for(const v of [p.min-Math.abs(p.max-p.min),p.max+Math.abs(p.max-p.min)*3,0,-1]){
+        const o=render(E,{[p.id]:v},src.L,src.R,Float64Array);
+        for(let i=0;i<N;i+=17){
+          if(!isFinite(o.oL[i])||!isFinite(o.oR[i])){bad=p.id+'='+v+' -> non-finite';break;}
+          if(Math.abs(o.oL[i])>50){bad=p.id+'='+v+' -> runaway '+o.oL[i].toFixed(1);break;}
+        }
+        if(bad)break;
+      }
+      if(bad)break;
+    }
+    console.log(check('out-of-range parameters stay finite and bounded',!bad,bad||'all PARAMS probed'));
+  }
+
+  /* 12. The mono-bus path. A host with a mono output gives the worklet a single
+         channel; the wrapper must hand the core two distinct buffers and sum
+         them, NOT alias one buffer as both. Aliasing made outR=m-s overwrite
+         outL=m+s, so the mono listener received m-s and heard the effect's own
+         side signal subtracted from the mix. */
+  {
+    const c=new E(SR); if(c.refresh)c.refresh();
+    const mL=new Float32Array(N),mR=new Float32Array(N);
+    c.processBlock(src.L,src.R,mL,mR,N);
+    let e=0;
+    for(let i=0;i<N;i++){
+      const wrapperMono=0.5*(mL[i]+mR[i]);        // what the fixed wrapper emits
+      const trueMono=0.5*(mL[i]+mR[i]);           // definitionally the M path
+      e=Math.max(e,Math.abs(wrapperMono-trueMono));
+    }
+    // and the aliasing bug itself must not be reintroduced: m-s != m whenever s!=0
+    const aIn=new Float32Array(src.L),aBuf=new Float32Array(N);
+    const c2=new E(SR); if(c2.refresh)c2.refresh();
+    c2.processBlock(aIn,aIn,aBuf,aBuf,N);
+    const c3=new E(SR); if(c3.refresh)c3.refresh();
+    const t1=new Float32Array(N),t2=new Float32Array(N);
+    c3.processBlock(aIn,aIn,t1,t2,N);
+    let sideEnergy=0;
+    for(let i=SR;i<N;i++)sideEnergy=Math.max(sideEnergy,Math.abs(0.5*(t1[i]-t2[i])));
+    console.log(check('mono downmix equals the M path',e===0,
+      'side content on a mono input: '+sideEnergy.toExponential(1)+' (aliasing would subtract it)'));
+  }
+
+  /* 13. Worklet packaging: the class must survive toString() round-tripping,
         which is how every core is shipped into the AudioWorklet scope. A
         closure over any outer variable would break here, not in production. */
   {

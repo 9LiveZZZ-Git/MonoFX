@@ -47,11 +47,20 @@ Cache parameter pointers in `prepareToPlay`; never call
   time over 50 ms. Use `SmoothedValue` for anything the user can drag; the
   invariant tests will not catch a zipper.
 - `setLatencySamples`: MonoFX cores report **0**. MonoLock live reports
-  **W − hop** (384 at 512-pt, 768 at 1024-pt). Note the JS measurement of
-  18.7 ms at 1024 includes host-quantum staging that a JUCE host absorbs
-  differently — re-measure in-host rather than copying the number.
-- The JS `processBlock` handles any block size via a staging FIFO. Keep that
-  structure; JUCE hands you variable block sizes too.
+  `core.latencySamples()`, which is **W** (512 at 512-pt, 1024 at 1024-pt) and
+  is constant for every host block size. Call the method; do not re-derive it.
+  It used to be `W − hop` plus a variable FIFO-priming term, which is why the
+  measured figure moved with the quantum (384–480 samples at 512-pt) and why
+  the old "18.7 ms at 1024-pt" was really 16 ms of engine plus 128 samples of
+  the test's own block size.
+- The JS `processBlock` handles any block size via a staging FIFO, verified
+  bit-identical across 17 quanta from 32 to 8192 samples. Keep that structure —
+  but note the JS version *grows* the FIFO on demand, which allocates. In C++,
+  size it once in `prepareToPlay` from `maximumExpectedSamplesPerBlock` and
+  never reallocate. The FIFO must be primed with `hop` zeros at reset: without
+  that cushion the reader structurally underruns whenever the block size is not
+  commensurate with `hop`, and the old code then emitted a zero *without*
+  advancing the read pointer, which stretched the stream instead of delaying it.
 
 ## 4. Test port
 

@@ -19,12 +19,13 @@ class DelayCore{
     this.len=len;this.mask=len-1;
     this.mBuf=new Float64Array(len);this.sBuf=new Float64Array(len);
     this.wp=0;this.dCur=this.time*0.001*sr;
-    this.lpM=0;this.lpS=0;
+    this.lpM=0;this.lpS=0;this.pms=0;this.pmm=0;
     this.bypass=false;this.mono=false;this.bypassMix=0;this.monoMix=0;
   }
   resetStreams(){
     this.mBuf.fill(0);this.sBuf.fill(0);this.wp=0;
     this.dCur=this.time*0.001*this.sr;this.lpM=0;this.lpS=0;
+    this.pms=0;this.pmm=0;
     this.bypassMix=this.bypass?1:0;this.monoMix=this.mono?1:0;
   }
   read(buf,d){
@@ -35,20 +36,44 @@ class DelayCore{
   }
   processBlock(inL,inR,outL,outR,N){
     const sr=this.sr,stp=1/(0.010*sr);
-    const dT=Math.max(4,this.time*0.001*sr),gl=1-Math.exp(-1/(0.05*sr));
-    const lpc=1-Math.exp(-2*Math.PI*this.tone/sr);
-    const mix=this.mix,wS=this.width*mix*0.5,fb=this.fb;
+    // Clamp to the ring as well as to the 4-sample interpolator minimum: read()
+    // masks its index, so an out-of-range time would silently alias to
+    // (d mod len) — time=2731 ms at 48 kHz became a 0.3 ms feedback loop.
+    const dT=Math.min(this.len-4,Math.max(4,this.time*0.001*sr)),gl=1-Math.exp(-1/(0.05*sr));
+    // Clamp: parameters arrive unvalidated via Object.assign from a postMessage.
+    // tone above Nyquist makes lpc exceed 1 and the one-pole diverges; fb above
+    // 0.95 makes the recirculation grow without bound.
+    const tone=Math.min(0.49*sr,Math.max(20,this.tone));
+    const fb=Math.min(0.95,Math.max(0,this.fb));
+    const mix=Math.min(1,Math.max(0,this.mix)),width=Math.min(1,Math.max(0,this.width));
+    const lpc=1-Math.exp(-2*Math.PI*tone/sr);
+    const wS=width*mix*0.5;
+    const bal=1-Math.exp(-1/(0.050*sr)); // 50 ms image-balance estimator
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
       this.dCur+=(dT-this.dCur)*gl;                 // analog-style glide
       const mWet=this.read(this.mBuf,this.dCur);
       const sWet=this.read(this.sBuf,this.dCur);
-      this.lpM+=lpc*(mWet-this.lpM);this.lpS+=lpc*(sWet-this.lpS);
+      // These one-poles sit inside the recirculation: flush denormals and
+      // quarantine NaN/Inf so one bad sample cannot latch the echo train.
+      const nlM=this.lpM+lpc*(mWet-this.lpM),nlS=this.lpS+lpc*(sWet-this.lpS);
+      this.lpM=Number.isFinite(nlM)&&(nlM>1e-24||nlM<-1e-24)?nlM:0;
+      this.lpS=Number.isFinite(nlS)&&(nlS>1e-24||nlS<-1e-24)?nlS:0;
       this.mBuf[this.wp]=M+fb*this.lpM;             // echo train (M)
       this.sBuf[this.wp]=M-fb*this.lpS;             // alternating-sign: ping-pong ILD
       this.wp=(this.wp+1)&this.mask;
-      const mOut=M+mix*mWet;                        // mono path: width-independent
-      const sOut=S+wS*sWet;
+      const mOut=M*(1-mix)+mix*mWet;                // mono path: width-independent
+      const sW=wS*sWet;                             // ping-pong ILD
+      // Image-balance corrector — see monofx-phaser.js. The side ring is fed from
+      // the same M as the echo train, so E[m*sW] = 1/(1+fb^2) > 0: the loudest
+      // (first) repeat always landed on the same side and the whole train sat
+      // 5.2 dB left. This removes the net bias while leaving the alternation —
+      // the repeats still bounce, they just no longer pull the image. Cannot
+      // affect the mono sum (2m), and is identically zero at mix=0.
+      const al=this.pmm>1e-20?Math.min(4,Math.max(-4,this.pms/this.pmm)):0;
+      const sOut=S*(1-mix)+sW-al*mOut;
+      this.pms+=bal*(mOut*sW-this.pms);
+      this.pmm+=bal*(mOut*mOut-this.pmm);
       const bT=this.bypass?1:0,mT=this.mono?1:0;
       this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
       this.monoMix+=Math.max(-stp,Math.min(stp,mT-this.monoMix));

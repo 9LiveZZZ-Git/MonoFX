@@ -31,25 +31,34 @@ a runtime pattern but not an algorithm.
 
 These are the product. Everything else is negotiable.
 
-1. **Mono sum must not depend on the width control** (MonoFX). Verified in
-   float64 as bit-exact; float32 gets exactly the 1-ULP rounding floor
-   (≈ −138 dBFS). If a change makes this −90 dBFS, the change is wrong even if
-   it sounds better.
+1. **Mono sum must not depend on the width control** (MonoFX). The mid path is
+   bit-exact width-free as arithmetic; the *reconstructed* sum lands 1–2 ULP off
+   (≈ 2.2e-16, −307 to −319 dB) because the cores return L and R separately and
+   `fl(m+s)+fl(m−s) != 2m`. The suite's tolerance is `1e-15`. float32 gets the
+   1-ULP rounding floor (−141 to −144.5 dBFS). If a change makes this −90 dBFS,
+   the change is wrong even if it sounds better. Do **not** port this assertion
+   as `REQUIRE(a == b)` — it will fail with no bug present.
 2. **Already-compatible audio must pass through untouched** (MonoLock). An
-   identical-channel input nulls at −122.9 dBFS at every strength setting, and
-   the optional enhancement stages (consistency pass, dual-resolution) must
-   never fire on it.
+   identical-channel input nulls at −122.9 dBFS at every strength setting
+   **across the whole buffer, edges included**, and *both* optional enhancement
+   stages (consistency pass, dual-resolution) must stay idle on it.
 3. **`mix = 0` is bit-transparent** on every MonoFX core.
 4. **Block-size independence.** A 4096-sample render must equal a 128-sample
-   streamed render exactly. Hosts vary the quantum arbitrarily.
-5. **Determinism.** Same input + same params ⇒ bit-identical output. No
+   streamed render exactly. Hosts vary the quantum arbitrarily. This applies to
+   `LiveCore` too, which is checked across 17 block sizes from 32 to 8192 — its
+   FIFO used to inject dropouts at sizes incommensurate with `hop` and to
+   overwrite unread audio above `W*4`.
+5. **`LiveCore` latency is exactly `W`, for every host block size.** Report
+   `latencySamples()`, never a re-derived expression. It was previously
+   `W-hop` plus a variable priming term, so the number moved with the quantum.
+6. **Determinism.** Same input + same params ⇒ bit-identical output. No
    `Math.random`, no time-dependent state, no uninitialized memory.
-6. **Enhancement stages are adoption-guarded.** Any stage that "improves"
+7. **Enhancement stages are adoption-guarded.** Any stage that "improves"
    output must be measured against the primary objective and discarded if it
    doesn't help. Two stages in MonoLock already fail this on some material and
    are correctly rejected at runtime.
 
-`npm test` checks all six across 60 assertions. Port these to Catch2 or
+`npm test` checks all seven across 80 assertions. Port these to Catch2 or
 GoogleTest as you port the DSP — see `docs/juce-port-plan.md` §4.
 
 ## 3. What is NOT done
@@ -60,18 +69,25 @@ Be clear-eyed about this list; it's the actual remaining work.
 - **No parameter automation, no state save/restore, no presets.**
 - **No oversampling.** The phaser and chorus have nonlinear-ish behavior at
   extreme settings that would benefit from 2× — measure before assuming.
-- **No denormal protection in the C++ sense.** The JS cores flush tiny values
-  manually in the feedback paths; C++ needs `ScopedNoDenormals` plus a review
-  of every recursive path.
+- **No denormal protection in the C++ sense.** All four JS cores now flush tiny
+  values *and* quarantine NaN/Inf in every recursive path (the old guard was
+  `Math.abs(x)<1e-24`, and `Math.abs(NaN)<1e-24` is false, so one bad sample
+  latched the phaser forever). C++ needs `ScopedNoDenormals` for the denormal
+  half; the NaN half still needs the explicit guard.
 - **Reverb makeup gain (1.5×) was set by ear-free guesswork.** FDN loudness
   needs real listening. Same for chorus side-shimmer depth at high width.
+- **The image-balance corrector's 50 ms time constant is a guess.** It is the
+  one number in the cores that was not derived or measured — it converges fast
+  enough to hold the image on sustained material and slow enough to leave a
+  one-shot ping-pong bouncing, but nobody has listened to it.
 - **The live mic path in the MonoLock prototype is untested** — headless
   testing can't reach it.
-- **MonoLock's mid-file polarity flip tops out at 0.745** (vs ~0.99 for the
+- **MonoLock's mid-file polarity flip tops out at 0.747** (vs ~0.99 for the
   other cases). Cause is estimator convergence inside the ±0.25 s boundary
   crossfade, not a bug. It's the most promising remaining algorithmic win.
 - **No latency compensation reporting** — MonoLock live must call
-  `setLatencySamples()`; MonoFX cores are zero-latency and must report 0.
+  `setLatencySamples(core.latencySamples())`, which is `W` and is now constant
+  across host block sizes; MonoFX cores are zero-latency and must report 0.
 
 ## 4. Build order (suggested)
 
@@ -94,6 +110,11 @@ Be clear-eyed about this list; it's the actual remaining work.
 Eight numbered regression principles are in `docs/mono-maximizer-spec.md` §10.
 The ones most likely to bite a C++ port:
 
+- **A side signal correlated with the mid pans the image.** `outL=m+s` and
+  `outR=m-s` carry unequal energy whenever `E[m·s] != 0`, so a width term built
+  from material the mid path already contains steers the image instead of
+  widening it. All four cores now subtract the projection of the wet side term
+  onto the mid; that cannot touch the mono sum, which is `2m` either way.
 - **Circular quantities need circular arithmetic.** Linear slew limiting on a
   phase value sign-flips across ±π when rounding lands sub-ULP past the
   boundary. Use shortest-arc.
