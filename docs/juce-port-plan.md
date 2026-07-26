@@ -65,15 +65,38 @@ Cache parameter pointers in `prepareToPlay`; never call
 ## 4. Test port
 
 `tests/monofx-cores.test.js` and `tests/monolock-engine.test.js` translate
-directly to Catch2. Same signals (the LCG generator in `tests/lib/signals.js` is
-deliberately trivial to reimplement — copy the constants exactly so the numbers
-match), same assertions, same tolerances. Run them in CI on every commit.
+directly to Catch2. Run them in CI on every commit.
 
-The float64-vs-float32 split matters in the port: JUCE processes `float`
-buffers, so run the invariance test by rendering into `double` buffers directly
-from the core (template the sample type, or add a test-only `double` overload).
-Otherwise you can only ever verify the 1-ULP bound, not the exact identity, and
-you'll lose the ability to distinguish "algebraically correct" from "close".
+**Do not expect identical numbers, and do not reimplement the signals.** Both
+of those instincts are wrong, for measured reasons:
+
+- ECMAScript defines the transcendentals as implementation-approximated, so JS
+  and C++ disagree by 1–2 ULP on 3–36 % of inputs. Samples therefore agree to
+  ~1e-14, not exactly. The *structural* invariants (mono-sum width invariance,
+  `mix=0` transparency, block-size independence) are algebraic and do agree
+  exactly — assert those with equality and everything else with a tolerance.
+- Reimplementing `drums()`/`pink()` in C++ makes signal generation another
+  place the two sides can diverge. `tools/gen-vectors.js` dumps the inputs as
+  well as the outputs, so the C++ side reads the same bytes and a failure can
+  only mean the DSP differs.
+
+`native/` already implements this: four cores plus `monofx_diff`, 64 cases,
+with negative controls proving it catches injected defects. See
+`native/README.md` for the measured libm and compiler-flag data.
+
+The float64-vs-float32 split matters, and it cuts in opposite directions for
+input and output — the cores in `native/` are templated on the sample type so
+you can choose each independently:
+
+- **Output in `double`.** A host gives you `float` buffers, but rendering the
+  invariance test into `float` caps it at the 1-ULP float32 floor
+  (−141 dBFS), which cannot distinguish "algebraically correct" from "close".
+  Render into `double` to see the real 2.2e-16.
+- **Input in `float`.** `mix = 0` bit-transparency is exact only for float32
+  input: the output is `0.5*(L+R) + 0.5*(L-R)`, and with 24-bit operands both
+  sums are exact in float64 so the identity holds. With full float64 input it
+  is 1 ULP off on ~9.5 % of samples. Feeding that test float64 does not find a
+  bug — it asks the arithmetic for something it never promised.
 
 ## 5. MonoLock-specific concerns
 
@@ -101,7 +124,7 @@ kind of thing that survives a refactor while being silently wrong.
 | # | Deliverable | Done when |
 |---|---|---|
 | 1 | CMake + empty pass-through VST3 | Loads in a host, audio passes |
-| 2 | Four MonoFX cores in C++ | Catch2 port green with matching numbers |
+| 2 | Four MonoFX cores in C++ | **done** — `npm run test:diff`: 64/64 cases within 1e-9, 12/12 invariants exact |
 | 3 | Descriptor-driven editor | All four plugins share one editor build |
 | 4 | State, presets, automation | Session recall round-trips exactly |
 | 5 | `LiveCore` / MonoLock Live | Anti-phase test green in-host |

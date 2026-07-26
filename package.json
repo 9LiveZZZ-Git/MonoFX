@@ -2,14 +2,19 @@
   "name": "monofx",
   "version": "0.5.0",
   "private": true,
-  "description": "MonoFX — mono-compatible effects suite. Reference DSP, prototypes, and regression suites for the JUCE/VST3 port.",
+  "description": "MonoFX \u2014 mono-compatible effects suite. Reference DSP, prototypes, and regression suites for the JUCE/VST3 port.",
   "scripts": {
     "extract": "node tools/extract-engine.js",
     "test": "npm run extract && node tests/monofx-cores.test.js && node tests/monolock-engine.test.js",
     "test:cores": "node tests/monofx-cores.test.js",
     "test:monolock": "npm run extract && node tests/monolock-engine.test.js",
-    "serve": "python3 -m http.server 8000"
+    "serve": "python3 -m http.server 8000",
+    "vectors": "node tools/gen-vectors.js",
+    "native": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build -j",
+    "test:diff": "npm run vectors && npm run native && ./native/build/monofx_diff vectors"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "UNLICENSED"
 }

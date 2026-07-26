@@ -3,3 +3,8 @@ build/
 *.vst3
 *.component
 .DS_Store
+
+# Differential test vectors: ~56 MB of float64, and a pure function of the JS
+# reference — regenerate with `npm run vectors` rather than committing them.
+vectors/
+native/build/

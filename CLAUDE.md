@@ -42,7 +42,13 @@ These are the product. Everything else is negotiable.
    identical-channel input nulls at −122.9 dBFS at every strength setting
    **across the whole buffer, edges included**, and *both* optional enhancement
    stages (consistency pass, dual-resolution) must stay idle on it.
-3. **`mix = 0` is bit-transparent** on every MonoFX core.
+3. **`mix = 0` is bit-transparent** on every MonoFX core — exactly, at host
+   precision. The output is reconstructed as `m+s = 0.5*(L+R) + 0.5*(L-R)`;
+   with float32 operands both sums are exact in float64, so this is an
+   identity. With full float64 input it degrades to 1 ULP on ~9.5 % of
+   samples (measured: 190838/2000000 random pairs, worst 2.2e-16). Feed the
+   test float32, as every host does — float64 asks the arithmetic for
+   something it never promised.
 4. **Block-size independence.** A 4096-sample render must equal a 128-sample
    streamed render exactly. Hosts vary the quantum arbitrarily. This applies to
    `LiveCore` too, which is checked across 17 block sizes from 32 to 8192 — its
@@ -65,7 +71,10 @@ GoogleTest as you port the DSP — see `docs/juce-port-plan.md` §4.
 
 Be clear-eyed about this list; it's the actual remaining work.
 
-- **No JUCE project exists.** No CMake, no `AudioProcessor`, no editor. Start here.
+- **No plugin project exists.** `native/` has CMake, the four cores in C++, and
+  a differential harness against the JS reference — but no `AudioProcessor`,
+  no editor, no plugin target in any format. Pick a framework and shell the
+  cores; `monofx_core` is deliberately framework-free so that choice stays cheap.
 - **No parameter automation, no state save/restore, no presets.**
 - **No oversampling.** The phaser and chorus have nonlinear-ish behavior at
   extreme settings that would benefit from 2× — measure before assuming.
@@ -93,9 +102,12 @@ Be clear-eyed about this list; it's the actual remaining work.
 
 1. **CMake + JUCE skeleton**, one shared `monofx_core` static library, five
    plugin targets. Get an empty pass-through VST3 loading in a host first.
-2. **Port the four MonoFX cores** — they're ~60 lines each, straight
-   translation, no FFT. Port `tests/monofx-cores.test.js` alongside; it should
-   go green in C++ with the same numbers.
+2. **Port the four MonoFX cores** — done, in `native/monofx_core/`, with a
+   differential harness (`npm run test:diff`) comparing every sample against
+   the JS reference. Note it goes green with the same *invariants*, not the
+   same *numbers*: JS and C++ transcendentals differ by 1–2 ULP, so samples
+   agree to ~1e-14 and the structural invariants agree exactly. See
+   `native/README.md`.
 3. **Generic editor driven by the `PARAMS` descriptor.** Each core already
    declares its parameters (id, label, min, max, default, log, unit, decimals).
    Build one editor that reads that table so all four plugins share it.
