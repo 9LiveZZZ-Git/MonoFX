@@ -11,7 +11,10 @@
     "serve": "python3 -m http.server 8000",
     "vectors": "node tools/gen-vectors.js",
     "native": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build -j",
-    "test:diff": "npm run vectors && npm run native && ./native/build/monofx_diff vectors"
+    "test:diff": "npm run vectors && npm run native && ./native/build/monofx_diff vectors",
+    "quality": "node tools/quality/reverb-character.js && node tools/quality/aliasing.js && node tools/quality/host-sim.js",
+    "quality:audio": "node tools/quality/render-audio.js",
+    "test:host": "node tools/quality/host-sim.js"
   },
   "engines": {
     "node": ">=18"

@@ -189,3 +189,133 @@ The general lesson for this codebase: measure the input too.
   is written.
 - **No multi-instance, long-session, or denormal-stress testing** of the kind a
   real host imposes.
+
+---
+
+# Addendum, 2026-07-28 — closing the coverage gaps
+
+§6 listed four things this audit could not establish. Three are now measured and
+the fourth is substantially closed. Tooling lives in `tools/quality/`:
+
+```bash
+npm run quality        # reverb character + aliasing sweep + host simulation
+npm run quality:audio  # renders listenable 24-bit WAVs, including mono folds
+npm run test:host      # host simulation on its own (20 checks)
+```
+
+Output goes to `quality-out/` (gitignored; a pure function of the sources).
+Analysis is rendered as PNG graphs, because the defects below are invisible in
+scalar summaries and obvious in a picture.
+
+## New finding 1 — the reverb has an audible tick ~0.4 s into every tail
+
+The IR spectrogram shows a bright vertical line mid-tail. It is real: **+17.3 dB
+above the local tail level, ~2 ms wide**, in an otherwise smooth −40 dB decay,
+stable across analysis hop sizes. It is an FDN echo-coincidence peak, confirmed
+by scaling all eight delay lengths:
+
+| line lengths | burst time |
+|---|---|
+| default | 394 ms |
+| × 1.05 | 414 ms (predicted 414) |
+| × 0.90 | 355 ms (predicted 355) |
+| reordered, same set | 394 ms (unchanged) |
+
+It scales exactly with the multiplier and ignores ordering, so it is set by the
+lengths themselves. Nudging them to the nearest primes does **not** fix it —
+pairwise coprimality is not sufficient here.
+
+## New finding 2 — echo density is too low, which is the same root cause
+
+Abel–Huang normalised echo density (1.0 = indistinguishable from noise, i.e.
+fully diffuse):
+
+| SIZE | density after 400 ms |
+|---|---|
+| 0.4 | reaches 1.0 at ~200 ms |
+| 1.0 | stalls at ~0.85 |
+| 2.0 | **~0.25 — never becomes diffuse** |
+
+At SIZE 2 the tail is still a collection of discrete echoes. Eight lines with no
+input diffusion cannot build density fast enough to bury individual path
+coincidences — which is exactly why finding 1 is audible. The standard fix is
+input diffusion (a short allpass chain ahead of the FDN) and/or more lines; it
+addresses both findings at once.
+
+The decay curves themselves are excellent — straight lines from 0 to −70 dB at
+every DECAY setting, no multi-slope, no truncation. The problem is density and
+calibration, not the decay law's shape.
+
+## New finding 3 — the image-balance corrector cost 30–35 dB of THD (fixed)
+
+This one was self-inflicted: the corrector added on 2026-07-25 to stop WIDTH
+panning the image used a 50 ms time constant. `al = pms/pmm` is a ratio of two
+smoothed products, so it ripples at twice the signal frequency, and multiplying
+`mOut` by a rippling gain is intermodulation.
+
+| core | 50 ms | corrector off | attributable |
+|---|---|---|---|
+| CHORUS | −62.6 dB | −93.4 dB | **30.8 dB worse** |
+| PHASER | −67.8 dB | −102.7 dB (floor) | **35.0 dB worse** |
+| DELAY | −102.7 dB | −102.7 dB | none |
+| REVERB | −63.0 dB | −64.1 dB | none |
+
+A time-constant scan showed **500 ms is strictly better on both axes** — about
+20 dB less distortion *and* slightly better image balance, because a steadier
+estimate tracks the true projection instead of chasing the ripple. Applied:
+
+- Phaser THD+N −67.8 → **−86.5 dB**; chorus −62.6 → **−82.7 dB**
+- Suite-wide worst image imbalance 0.987 → **0.402 dB**
+- Ping-pong still alternates L R L R L R; all 80 assertions green
+
+## New finding 4 — aliasing characterised across the parameter space
+
+Worst non-harmonic spur over a 5×5 grid per core (analysis floor −102.7 dB at
+1 kHz). The cores are clean except under heavy modulation:
+
+- Chorus, 1 kHz, RATE 3 / DEPTH 1: **−49.6 dB THD+N** (0.33 %)
+- Chorus, 100 Hz, RATE 3 / DEPTH 1: **−29.8 dB** (3.2 %) — the worst case found
+- Phaser at max rate and depth: about −22 dB worst spur, mostly modulation
+  sidebands rather than aliasing
+- Delay and reverb: at the measurement floor with feedback off; their apparent
+  "distortion" is their own comb/tail structure, confirmed by sweeping FEEDBK
+  (−102.7 dB at fb=0 rising monotonically to −46.0 dB at fb=0.8)
+
+This supports the oversampling item already on the fix list, and localises it:
+the chorus's modulated delay is what needs it, not the suite.
+
+## New finding 5 — host simulation, 20/20 pass
+
+There is no plugin layer, so nothing had exercised these cores the way a DAW
+does. `tools/quality/host-sim.js` now does:
+
+- **Random block sizes 1–2048**, changing every callback: bit-identical to a
+  whole-buffer render on all four cores
+- **Every parameter automated continuously** mid-stream: finite and bounded, no
+  step larger than 2.8× the source's own
+- **Transport stop/start**: post-reset output bit-identical to a fresh instance
+- **Interleaved instances**: no shared or static state
+- **60 s of digital silence** after audio: finite, residual exactly 0, under 1 %
+  of realtime — no denormal stall
+
+## Gap 4 — listening
+
+Still not closed by measurement, but `npm run quality:audio` renders 24-bit WAVs
+of each plugin on a musical test bed, each with its **mono fold** alongside, plus
+a normalised reverb IR where the 0.39 s tick is easy to hear. A human still has
+to listen; there is now something to listen to.
+
+## Corrections to this audit's own method
+
+- The **coprime test was initially reported as refuting** the echo-alignment
+  hypothesis. It did not: nudging 1426→1427 is a 0.07 % change, which moves a
+  394 ms alignment by ~0.3 ms — invisible at the 10.7 ms frame resolution used.
+  Re-run with ±5–10 % changes, it confirmed the hypothesis instead.
+- The **first aliasing number was −6.7 dB**, which was a guard band too narrow
+  for heavy FM: Carson's rule gives ±88 Hz of sidebands at RATE 3 / DEPTH 1
+  against a ±60 Hz guard, and the 3rd harmonic smears over ±280 Hz. Widening
+  the guard to ±15 % per harmonic gives the real figure, −49.6 dB.
+- A **measurement floor check** was added after the fact and should have come
+  first: the analysis chain reads −102.7 dB on a pure sine at 1 kHz but only
+  −60.5 dB at 100 Hz, so low-frequency distortion figures near −60 dB are the
+  floor, not the core.

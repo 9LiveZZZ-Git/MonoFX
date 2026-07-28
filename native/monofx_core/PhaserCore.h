@@ -55,7 +55,12 @@ class PhaserCore {
     const double phInc = 2.0 * PI * rateC / sr;
     const double wS = widthC * mixC * 0.5;
     const double dcR = 1.0 - 2.0 * PI * 20.0 / sr;   // 20 Hz DC blocker
-    const double bal = 1.0 - math::exp(-1.0 / (0.050 * sr));  // 50 ms estimator
+    const double bal = 1.0 - math::exp(-1.0 / (0.500 * sr));
+    // 500 ms, NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples
+    // at twice the signal frequency, and multiplying mOut by a rippling gain is
+    // intermodulation. At 50 ms that cost 30-35 dB of THD in the phaser and
+    // chorus. 500 ms is strictly better on both axes: ~20 dB less distortion
+    // AND slightly better image balance.
 
     for (int i = 0; i < N; ++i) {
       const double L = static_cast<double>(inL[i]), R = static_cast<double>(inR[i]);

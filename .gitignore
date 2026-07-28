@@ -8,3 +8,6 @@ build/
 # reference — regenerate with `npm run vectors` rather than committing them.
 vectors/
 native/build/
+
+# Quality-suite renders: graphs and ~21 MB of audio, regenerate with `npm run quality`
+quality-out/

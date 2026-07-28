@@ -44,7 +44,14 @@ class ChorusCore{
           vx=Math.min(1,Math.max(0,this.voxmix));
     const modS=(0.0005+depth*0.004)*sr;        // 0.5–4.5 ms sweep
     const wS=width*mix*0.5;
-    const bal=1-Math.exp(-1/(0.050*sr));       // 50 ms image-balance estimator
+    const bal=1-Math.exp(-1/(0.500*sr)); // image-balance estimator, 500 ms
+    // NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples at
+    // twice the signal frequency; multiplying mOut by a rippling gain is
+    // intermodulation. At 50 ms that cost 30-35 dB of THD in the phaser and
+    // chorus (measured: chorus -62.6 dB vs -93.4 dB with the corrector off).
+    // 500 ms is strictly better on BOTH axes - about 20 dB less distortion
+    // AND slightly better image balance, because a steadier estimate tracks
+    // the true projection instead of chasing the ripple.
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
       this.buf[this.wp]=M;

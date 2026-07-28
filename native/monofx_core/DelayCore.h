@@ -60,7 +60,12 @@ class DelayCore {
     const double widthC= jsmath::min(1.0, jsmath::max(0.0, width));
     const double lpc = 1.0 - math::exp(-2.0 * PI * toneC / sr);
     const double wS = widthC * mixC * 0.5;
-    const double bal = 1.0 - math::exp(-1.0 / (0.050 * sr));
+    const double bal = 1.0 - math::exp(-1.0 / (0.500 * sr));
+    // 500 ms, NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples
+    // at twice the signal frequency, and multiplying mOut by a rippling gain is
+    // intermodulation. At 50 ms that cost 30-35 dB of THD in the phaser and
+    // chorus. 500 ms is strictly better on both axes: ~20 dB less distortion
+    // AND slightly better image balance.
 
     for (int i = 0; i < N; ++i) {
       const double L = static_cast<double>(inL[i]), R = static_cast<double>(inR[i]);

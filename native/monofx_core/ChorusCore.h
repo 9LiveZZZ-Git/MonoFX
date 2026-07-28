@@ -56,7 +56,12 @@ class ChorusCore {
     const double vx     = jsmath::min(1.0,  jsmath::max(0.0, voxmix));
     const double modS = (0.0005 + depthC * 0.004) * sr;   // 0.5-4.5 ms sweep
     const double wS = widthC * mixC * 0.5;
-    const double bal = 1.0 - math::exp(-1.0 / (0.050 * sr));
+    const double bal = 1.0 - math::exp(-1.0 / (0.500 * sr));
+    // 500 ms, NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples
+    // at twice the signal frequency, and multiplying mOut by a rippling gain is
+    // intermodulation. At 50 ms that cost 30-35 dB of THD in the phaser and
+    // chorus. 500 ms is strictly better on both axes: ~20 dB less distortion
+    // AND slightly better image balance.
 
     for (int i = 0; i < N; ++i) {
       const double L = static_cast<double>(inL[i]), R = static_cast<double>(inR[i]);

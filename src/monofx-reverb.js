@@ -73,7 +73,14 @@ class ReverbCore{
     const lpc=1-Math.exp(-2*Math.PI*damp/sr);
     const preD=Math.min(this.preMask,Math.max(1,Math.round(Math.max(0,this.pre)*0.001*sr)));
     const wS=width*mix*1.5;
-    const bal=1-Math.exp(-1/(0.050*sr)); // 50 ms image-balance estimator
+    const bal=1-Math.exp(-1/(0.500*sr)); // image-balance estimator, 500 ms
+    // NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples at
+    // twice the signal frequency; multiplying mOut by a rippling gain is
+    // intermodulation. At 50 ms that cost 30-35 dB of THD in the phaser and
+    // chorus (measured: chorus -62.6 dB vs -93.4 dB with the corrector off).
+    // 500 ms is strictly better on BOTH axes - about 20 dB less distortion
+    // AND slightly better image balance, because a steadier estimate tracks
+    // the true projection instead of chasing the ripple.
     const l=this.l;
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
