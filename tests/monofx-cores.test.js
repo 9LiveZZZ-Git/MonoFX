@@ -156,16 +156,32 @@ for(const E of CORES){
           oL=new Float32Array(B),oR=new Float32Array(B);
     iL[10]=NaN; iR[10]=Infinity;
     c.processBlock(iL,iR,oL,oR,B);
-    let recovered=-1;
-    for(let blk=0;blk<64&&recovered<0;blk++){
+    // Count non-finite output across the WHOLE follow-up window, and require a
+    // SUSTAINED clean run — not merely the first clean block.
+    //
+    // Taking the first clean block as "recovered" is false-green for any core
+    // whose state has latency: the reverb's shortest delay line is 29.7 ms
+    // (~5.6 blocks at B=512), so a latched NaN has not circulated back to the
+    // output yet when block 0 is inspected. That test passed the reverb while
+    // 97.5% of its subsequent output was non-finite.
+    const BLOCKS=200;                       // ~2.1 s at B=512
+    let badSamples=0,total=0,cleanRun=0,recovered=-1;
+    for(let blk=0;blk<BLOCKS;blk++){
       for(let i=0;i<B;i++)iL[i]=iR[i]=0.3*Math.sin(2*Math.PI*440*(blk*B+i)/SR);
       c.processBlock(iL,iR,oL,oR,B);
       let ok=true;
-      for(let i=0;i<B;i++)if(!isFinite(oL[i])||!isFinite(oR[i])){ok=false;break;}
-      if(ok)recovered=blk;
+      for(let i=0;i<B;i++){total++;
+        if(!isFinite(oL[i])||!isFinite(oR[i])){badSamples++;ok=false;}}
+      if(ok){if(++cleanRun>=32&&recovered<0)recovered=blk-31;}else cleanRun=0;
     }
-    console.log(check('recovers from NaN/Inf input',recovered>=0&&recovered<=2,
-      recovered<0?'still non-finite after 0.7 s':'clean after '+recovered+' block(s)'));
+    // A bounded transient is acceptable and unavoidable: mix=0 is bit-transparent
+    // by contract, so the dry path MUST pass a non-finite input sample through.
+    // What must never happen is the state latching. Allow a few interpolator taps
+    // (<=16 samples); require a sustained clean run thereafter.
+    console.log(check('recovers from NaN/Inf input (sustained, whole window)',
+      recovered>=0&&recovered<=8&&badSamples<=16,
+      badSamples+'/'+total+' non-finite ('+(badSamples?'transient':'none')+
+      '), sustained clean from block '+recovered));
   }
 
   /* 10. The WIDTH control must widen, not pan. A mono input has S=0, so any L/R

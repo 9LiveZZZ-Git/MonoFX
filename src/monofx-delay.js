@@ -66,8 +66,11 @@ class DelayCore{
       const nlM=this.lpM+lpc*(mWet-this.lpM),nlS=this.lpS+lpc*(sWet-this.lpS);
       this.lpM=Number.isFinite(nlM)&&(nlM>1e-24||nlM<-1e-24)?nlM:0;
       this.lpS=Number.isFinite(nlS)&&(nlS>1e-24||nlS<-1e-24)?nlS:0;
-      this.mBuf[this.wp]=M+fb*this.lpM;             // echo train (M)
-      this.sBuf[this.wp]=M-fb*this.lpS;             // alternating-sign: ping-pong ILD
+      // Sanitise on the way into the rings: lpM/lpS are already guarded, but a
+      // non-finite M would still enter the echo train and recirculate.
+      const wM=M+fb*this.lpM,wS2=M-fb*this.lpS;
+      this.mBuf[this.wp]=Number.isFinite(wM)?wM:0;  // echo train (M)
+      this.sBuf[this.wp]=Number.isFinite(wS2)?wS2:0;// alternating-sign: ping-pong ILD
       this.wp=(this.wp+1)&this.mask;
       const mOut=M*(1-mix)+mix*mWet;                // mono path: width-independent
       const sW=wS*sWet;                             // ping-pong ILD

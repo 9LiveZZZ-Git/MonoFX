@@ -54,7 +54,7 @@ class ChorusCore{
     // the true projection instead of chasing the ripple.
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
-      this.buf[this.wp]=M;
+      this.buf[this.wp]=Number.isFinite(M)?M:0;   // no poison into the delay line
       const v=this.v;
       for(let j=0;j<3;j++){
         const d=Math.min(this.len-4,Math.max(4,this.base[j]*sr+modS*Math.sin(this.ph[j])));

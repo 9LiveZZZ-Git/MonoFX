@@ -104,8 +104,13 @@ class ReverbCore {
     for (int i = 0; i < N; ++i) {
       const double L = static_cast<double>(inL[i]), R = static_cast<double>(inR[i]);
       const double M = 0.5 * (L + R), Sd = 0.5 * (L - R);
-      preBuf[preW] = M;
-      const double x = preBuf[(preW - preD) & preMask];
+      // Quarantine NaN/Inf entering the state, not just denormals. The guard on
+      // lp[] below used to be fabs(v) < 1e-24, and fabs(NaN) < 1e-24 is false, so
+      // one bad sample latched the entire FDN permanently (97.5% of subsequent
+      // output non-finite, recovering never).
+      preBuf[preW] = std::isfinite(M) ? M : 0.0;
+      const double xr = preBuf[(preW - preD) & preMask];
+      const double x = std::isfinite(xr) ? xr : 0.0;
       preW = (preW + 1) & preMask;
 
       double sum = 0.0;
@@ -114,9 +119,8 @@ class ReverbCore {
       double mT = 0.0, sT = 0.0;
       for (int j = 0; j < 8; ++j) {
         const double f = l[(j + 3) & 7] - h;
-        lp[j] += lpc * (g[j] * f - lp[j]);
-        const double w = math::fabs(lp[j]) < 1e-24 ? 0.0 : lp[j];
-        bufs[j][ptrs[j]] = x * 0.35 + w;
+        lp[j] = jsmath::flush(lp[j] + lpc * (g[j] * f - lp[j]));
+        bufs[j][ptrs[j]] = x * 0.35 + lp[j];
         ptrs[j] = (ptrs[j] + 1) % lens[j];
         mT += l[j];
         sT += (j & 1) ? -l[j] : l[j];

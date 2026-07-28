@@ -77,8 +77,11 @@ class DelayCore {
       // the echo train forever.
       lpM = jsmath::flush(lpM + lpc * (mWet - lpM));
       lpS = jsmath::flush(lpS + lpc * (sWet - lpS));
-      mBuf[wp] = M + fbC * lpM;                     // echo train (M)
-      sBuf[wp] = M - fbC * lpS;                     // alternating sign: ping-pong ILD
+      // Sanitise into the rings: lpM/lpS are guarded, but a non-finite M would
+      // still enter the echo train and recirculate.
+      const double wM = M + fbC * lpM, wS2 = M - fbC * lpS;
+      mBuf[wp] = std::isfinite(wM) ? wM : 0.0;      // echo train (M)
+      sBuf[wp] = std::isfinite(wS2) ? wS2 : 0.0;    // alternating sign: ping-pong ILD
       wp = (wp + 1) & mask;
       const double mOut = M * (1.0 - mixC) + mixC * mWet;   // width-independent
       const double sW = wS * sWet;

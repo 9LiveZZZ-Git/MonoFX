@@ -84,8 +84,16 @@ class ReverbCore{
     const l=this.l;
     for(let i=0;i<N;i++){
       const L=inL[i],R=inR[i],M=0.5*(L+R),S=0.5*(L-R);
-      this.preBuf[this.preW]=M;
-      const x=this.preBuf[(this.preW-preD)&this.preMask];
+      // Quarantine NaN/Inf on the way INTO the state, not just denormals. The
+      // guard below used to be Math.abs(v)<1e-24, and Math.abs(NaN)<1e-24 is
+      // false, so one bad sample latched the whole FDN permanently: 97.5% of all
+      // subsequent output non-finite, recovering never. The phaser and delay were
+      // fixed on 2026-07-25; the reverb was missed because its regression test
+      // checks the FIRST block after injection, and the shortest line is 29.7 ms
+      // (~5.6 blocks at 256), so the NaN had not circulated back yet.
+      this.preBuf[this.preW]=Number.isFinite(M)?M:0;
+      const xr=this.preBuf[(this.preW-preD)&this.preMask];
+      const x=Number.isFinite(xr)?xr:0;
       this.preW=(this.preW+1)&this.preMask;
       let sum=0;
       for(let j=0;j<8;j++){l[j]=this.bufs[j][this.ptrs[j]];sum+=l[j];}
@@ -93,9 +101,11 @@ class ReverbCore{
       let mT=0,sT=0;
       for(let j=0;j<8;j++){
         const f=l[(j+3)&7]-h;
-        this.lp[j]+=lpc*(this.g[j]*f-this.lp[j]);
-        const w=Math.abs(this.lp[j])<1e-24?0:this.lp[j];
-        this.bufs[j][this.ptrs[j]]=x*0.35+w;
+        const nl=this.lp[j]+lpc*(this.g[j]*f-this.lp[j]);
+        // Same flush-and-quarantine as the phaser and delay: finite AND above
+        // the denormal threshold, or zero.
+        this.lp[j]=Number.isFinite(nl)&&(nl>1e-24||nl<-1e-24)?nl:0;
+        this.bufs[j][this.ptrs[j]]=x*0.35+this.lp[j];
         this.ptrs[j]=(this.ptrs[j]+1)%this.lens[j];
         mT+=l[j];sT+=(j&1)?-l[j]:l[j];
       }

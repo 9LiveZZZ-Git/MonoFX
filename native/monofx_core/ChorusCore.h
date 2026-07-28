@@ -66,7 +66,7 @@ class ChorusCore {
     for (int i = 0; i < N; ++i) {
       const double L = static_cast<double>(inL[i]), R = static_cast<double>(inR[i]);
       const double M = 0.5 * (L + R), Sd = 0.5 * (L - R);
-      buf[wp] = M;
+      buf[wp] = std::isfinite(M) ? M : 0.0;   // no poison into the delay line
       double v[3];
       for (int j = 0; j < 3; ++j) {
         const double d = jsmath::min(len - 4.0,

@@ -50,9 +50,13 @@ function lufs(L,R,sr){
   // RLB high-pass at ~38 Hz
   const f2=38.13547087602444, Q2=0.5003270373238773;
   const K2=Math.tan(Math.PI*f2/sr), d0=1+K2/Q2+K2*K2;
-  const hb0=1/ (1), hb1=-2, hb2=1;   // normalised below
+  // Normalise the numerator by d0 too. Deriving a1/a2 by bilinear (which divides
+  // by d0) while leaving b=[1,-2,1] un-normalised leaves a constant +0.043 dB
+  // gain error in this stage. Negligible for the relative comparisons it was
+  // used for, but wrong.
+  const hb0=1/d0, hb1=-2/d0, hb2=1/d0;
   const ha1=2*(K2*K2-1)/d0, ha2=(1-K2/Q2+K2*K2)/d0;
-  const chan=x=>biquad(biquad(x,sb0,sb1,sb2,sa1,sa2),1,hb1,hb2,ha1,ha2);
+  const chan=x=>biquad(biquad(x,sb0,sb1,sb2,sa1,sa2),hb0,hb1,hb2,ha1,ha2);
   const kl=chan(L),kr=chan(R);
   // 400 ms blocks, 75% overlap, two-stage gating
   const B=Math.round(0.4*sr),S=Math.round(B/4);
