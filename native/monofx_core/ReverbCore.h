@@ -133,8 +133,13 @@ class ReverbCore {
       // hold the image steady as the line lengths change.
       const double al = pmm > 1e-20 ? jsmath::min(4.0, jsmath::max(-4.0, pms / pmm)) : 0.0;
       const double sOut = Sd * (1.0 - mixC) + sW - al * mOut;
-      pms += bal * (mOut * sW - pms);
-      pmm += bal * (mOut * mOut - pmm);
+      // Guard the accumulators too: one NaN otherwise latches pms/pmm forever.
+      // The output survives (NaN > 1e-20 is false, so al falls back to 0) but the
+      // image-balance corrector is then silently dead for the rest of the session.
+      const double npms = pms + bal * (mOut * sW - pms);
+      const double npmm = pmm + bal * (mOut * mOut - pmm);
+      pms = std::isfinite(npms) ? npms : 0.0;
+      pmm = std::isfinite(npmm) ? npmm : 0.0;
 
       const double bT = bypass ? 1.0 : 0.0, mTn = mono ? 1.0 : 0.0;
       bypassMix += jsmath::max(-stp, jsmath::min(stp, bT - bypassMix));

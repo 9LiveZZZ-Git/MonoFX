@@ -82,8 +82,13 @@ class DelayCore{
       // affect the mono sum (2m), and is identically zero at mix=0.
       const al=this.pmm>1e-20?Math.min(4,Math.max(-4,this.pms/this.pmm)):0;
       const sOut=S*(1-mix)+sW-al*mOut;
-      this.pms+=bal*(mOut*sW-this.pms);
-      this.pmm+=bal*(mOut*mOut-this.pmm);
+      // Guard the accumulators too. Without this, one NaN latches pms/pmm
+      // forever; the OUTPUT survives (NaN>1e-20 is false, so al falls back to 0)
+      // but the image-balance corrector is then silently dead for the rest of
+      // the session - the worst kind of failure, because nothing looks wrong.
+      const npms=this.pms+bal*(mOut*sW-this.pms),npmm=this.pmm+bal*(mOut*mOut-this.pmm);
+      this.pms=Number.isFinite(npms)?npms:0;
+      this.pmm=Number.isFinite(npmm)?npmm:0;
       const bT=this.bypass?1:0,mT=this.mono?1:0;
       this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
       this.monoMix+=Math.max(-stp,Math.min(stp,mT-this.monoMix));

@@ -55,6 +55,11 @@ class PhaserCore {
     const double phInc = 2.0 * PI * rateC / sr;
     const double wS = widthC * mixC * 0.5;
     const double dcR = 1.0 - 2.0 * PI * 20.0 / sr;   // 20 Hz DC blocker
+    // Exact RMS-flat feedback makeup. Averaging |0.5*(1 + u/(1-fb*u))|^2 over the
+    // cascade phase u (which is what the LFO sweep does across the spectrum) gives
+    // 0.25*(2-fb^2)/(1-fb^2), so normalising to fb=0 needs exactly
+    // sqrt(2*(1-fb^2)/(2-fb^2)). FEEDBK then changes resonance, not level.
+    const double mk = math::sqrt(2.0 * (1.0 - fbC * fbC) / (2.0 - fbC * fbC));
     const double bal = 1.0 - math::exp(-1.0 / (0.500 * sr));
     // 500 ms, NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples
     // at twice the signal frequency, and multiplying mOut by a rippling gain is
@@ -76,9 +81,13 @@ class PhaserCore {
       // would boost DC by 1/(1-fb). Block it before it recirculates.
       dcY = fbS - dcX + dcR * dcY; dcX = fbS;
       if (dcY > -1e-24 && dcY < 1e-24) dcY = 0.0;
-      // Attenuating the chain input by (1-fb) pins the resonant peak at unity;
-      // undamped it reaches 1/(1-fb) = 10x at fb=0.9.
-      double x = M * (1.0 - fbC) + dcY * fbC, yA = 0.0, yB = 0.0;
+      // Do NOT attenuate the chain input. Scaling it by (1-fb) pinned the peak at
+      // unity but did so by FILLING THE NOTCH: wet=0.5*(M+x) leaves the dry M
+      // unscaled, so the notch floor becomes fb/(1+fb) and peak-to-notch contrast
+      // collapsed from 324 dB at fb=0 to 6.5 dB at fb=0.9 — FEEDBK ran backwards,
+      // making the effect weaker and quieter as it was turned up. Full resonance
+      // here, normalised at the output by `mk`.
+      double x = M + dcY * fbC, yA = 0.0, yB = 0.0;
       for (int st = 0; st < 6; ++st) {
         const double y = g * x + x1[st] - g * y1[st];
         x1[st] = jsmath::flush(x);
@@ -87,7 +96,7 @@ class PhaserCore {
         x = y;
       }
       fbS = jsmath::flush(x);
-      const double wet = 0.5 * (M + x);
+      const double wet = 0.5 * (M + x) * mk;
       const double mOut = M * (1.0 - mixC) + wet * mixC;   // width-independent
       const double sW = wS * (yA - yB);                    // stages 1 minus 4
       // Image-balance corrector: removing the projection of the wet side term
@@ -96,8 +105,13 @@ class PhaserCore {
       // at mix=0, where sW is zero — so mix=0 stays bit-transparent.
       const double al = pmm > 1e-20 ? jsmath::min(4.0, jsmath::max(-4.0, pms / pmm)) : 0.0;
       const double sOut = Sd * (1.0 - mixC) + sW - al * mOut;
-      pms += bal * (mOut * sW - pms);
-      pmm += bal * (mOut * mOut - pmm);
+      // Guard the accumulators too: one NaN otherwise latches pms/pmm forever.
+      // The output survives (NaN > 1e-20 is false, so al falls back to 0) but the
+      // image-balance corrector is then silently dead for the rest of the session.
+      const double npms = pms + bal * (mOut * sW - pms);
+      const double npmm = pmm + bal * (mOut * mOut - pmm);
+      pms = std::isfinite(npms) ? npms : 0.0;
+      pmm = std::isfinite(npmm) ? npmm : 0.0;
 
       const double bT = bypass ? 1.0 : 0.0, mT = mono ? 1.0 : 0.0;
       bypassMix += jsmath::max(-stp, jsmath::min(stp, bT - bypassMix));

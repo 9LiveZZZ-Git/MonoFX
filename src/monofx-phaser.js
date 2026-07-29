@@ -41,6 +41,14 @@ class PhaserCore{
           width=Math.min(1,Math.max(0,this.width));
     const phInc=2*Math.PI*rate/sr,wS=width*mix*0.5;
     const dcR=1-2*Math.PI*20/sr;        // 20 Hz DC blocker for the feedback path
+    // Exact RMS-flat feedback makeup. The wet transfer is
+    //   H(u) = 0.5*(1 + u/(1-fb*u)),  u = A^6 = e^{j*theta}
+    // and averaging |H|^2 over theta (which is what the LFO sweep does across the
+    // spectrum) gives mean|H|^2 = 0.25*(2-fb^2)/(1-fb^2). Normalising to fb=0
+    // therefore needs exactly sqrt(2*(1-fb^2)/(2-fb^2)) — so FEEDBK changes the
+    // resonance without changing the level, and the peak stays bounded (3.1x at
+    // fb=0.9 rather than the 15.3x an unnormalised chain reached).
+    const mk=Math.sqrt(2*(1-fb*fb)/(2-fb*fb));
     const bal=1-Math.exp(-1/(0.500*sr)); // image-balance estimator, 500 ms
     // NOT 50 ms. `al` is a ratio of two smoothed products, so it ripples at
     // twice the signal frequency; multiplying mOut by a rippling gain is
@@ -61,10 +69,13 @@ class PhaserCore{
       // at fb=0.9. Block DC before it recirculates.
       this.dcY=this.fbS-this.dcX+dcR*this.dcY;this.dcX=this.fbS;
       if(this.dcY>-1e-24&&this.dcY<1e-24)this.dcY=0;
-      // Attenuate the chain input by (1-fb) so the resonant peak stays at unity.
-      // Undamped, the cascade resonates at 1/(1-fb) = 10x at fb=0.9 and a
-      // sustained sweep drove the output to 15.3x full scale.
-      let x=M*(1-fb)+this.dcY*fb,yA=0,yB=0;
+      // Do NOT attenuate the chain input. Scaling it by (1-fb) pinned the peak at
+      // unity, but it did so by FILLING THE NOTCH: with wet=0.5*(M+x), the dry M
+      // is unscaled, so the notch floor becomes fb/(1+fb) and peak-to-notch
+      // contrast collapses from 324 dB at fb=0 to 6.5 dB at fb=0.9. FEEDBK then
+      // ran backwards — turning it up made the phasing weaker and quieter.
+      // Full resonance here, normalised at the output instead (see `mk` above).
+      let x=M+this.dcY*fb,yA=0,yB=0;
       for(let st=0;st<6;st++){
         const y=g*x+this.x1[st]-g*this.y1[st];
         // Flush denormals AND quarantine NaN/Inf. Math.abs(NaN)<1e-24 is false,
@@ -75,7 +86,7 @@ class PhaserCore{
         x=y;
       }
       this.fbS=Number.isFinite(x)&&(x>1e-24||x<-1e-24)?x:0;
-      const wet=0.5*(M+x);              // dry+allpassed = the notched signal
+      const wet=0.5*(M+x)*mk;           // dry+allpassed = the notched signal
       const mOut=M*(1-mix)+wet*mix;     // mono path: width-independent
       const sW=wS*(yA-yB);              // side sparkle: stage-1 minus stage-4
       // Image-balance corrector. outL=m+s and outR=m-s carry unequal energy
@@ -86,8 +97,13 @@ class PhaserCore{
       // does — so bit-transparency at mix=0 is untouched.
       const al=this.pmm>1e-20?Math.min(4,Math.max(-4,this.pms/this.pmm)):0;
       const sOut=S*(1-mix)+sW-al*mOut;
-      this.pms+=bal*(mOut*sW-this.pms);
-      this.pmm+=bal*(mOut*mOut-this.pmm);
+      // Guard the accumulators too. Without this, one NaN latches pms/pmm
+      // forever; the OUTPUT survives (NaN>1e-20 is false, so al falls back to 0)
+      // but the image-balance corrector is then silently dead for the rest of
+      // the session - the worst kind of failure, because nothing looks wrong.
+      const npms=this.pms+bal*(mOut*sW-this.pms),npmm=this.pmm+bal*(mOut*mOut-this.pmm);
+      this.pms=Number.isFinite(npms)?npms:0;
+      this.pmm=Number.isFinite(npmm)?npmm:0;
       const bT=this.bypass?1:0,mT=this.mono?1:0;
       this.bypassMix+=Math.max(-stp,Math.min(stp,bT-this.bypassMix));
       this.monoMix+=Math.max(-stp,Math.min(stp,mT-this.monoMix));
