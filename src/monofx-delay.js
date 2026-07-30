@@ -24,7 +24,11 @@ class DelayCore{
   }
   resetStreams(){
     this.mBuf.fill(0);this.sBuf.fill(0);this.wp=0;
-    this.dCur=this.time*0.001*this.sr;this.lpM=0;this.lpS=0;
+    // Same ring clamp processBlock applies: read() masks its index, so a dCur
+    // past the ring silently aliases to (d mod len) — time=6000 ms at 48 kHz
+    // left dCur=288000 against len=131072 and reset the delay to 538.7 ms.
+    this.dCur=Math.min(this.len-4,Math.max(4,this.time*0.001*this.sr));
+    this.lpM=0;this.lpS=0;
     this.pms=0;this.pmm=0;
     this.bypassMix=this.bypass?1:0;this.monoMix=this.mono?1:0;
   }

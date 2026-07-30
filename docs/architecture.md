@@ -71,11 +71,18 @@ click-free without needing a host-level crossfade.
 
 ### Phaser
 Six cascaded first-order allpass sections, swept by one LFO, **shared by both
-channels** — both ears get identical notch frequencies, so the notches are
-already mono-safe. Feedback is taken around the M chain only, DC-blocked (a
-first-order allpass has `H(1)=+1`, so the cascade is zero-phase at DC and raw
-feedback boosted it by `1/(1-fb)`), and the chain input is scaled by `(1-fb)` so
-the resonant peak stays at unity. Width comes from the *difference between stage
+channels** — so the *mid path's* notch frequencies are identical in both ears
+and the mono sum is width-free by construction. That is a claim about the M
+chain, not about what each ear receives: once WIDTH > 0 the side term is added
+to L and subtracted from R, so at the factory WIDTH 0.7 the two ear responses
+differ from each other by up to 19.2 dB and from the mono sum by up to 12.8 dB,
+and L peaks at +7.0 dB where the mono sum peaks at +2.1 dB (measured, frozen
+LFO at 90°, DEPTH .7 FB .4 MIX 1, cross-spectrum on mono pink noise; at WIDTH 0
+L ≡ R ≡ M to 0.000e+0 dB). Feedback is taken around the M chain only,
+DC-blocked (a first-order allpass has `H(1)=+1`, so the cascade is zero-phase at
+DC and raw feedback boosted it by `1/(1-fb)`). The chain input is *not* scaled —
+full resonance runs in the chain and the level is normalised at the output by
+`mk = sqrt(2(1-fb²)/(2-fb²))`, which is RMS-flat over the sweep. Width comes from the *difference between stage
 1 and stage 4 output* placed in S: a genuinely decorrelated signal with the
 phaser's spectral character that vanishes on sum. It must not involve stage 6 —
 the mid path already carries stage 6, so a side term containing it is correlated
