@@ -1913,7 +1913,15 @@ function transformExportHTML(doc){
 }
 
 /* HTML → Markdown */
-function mdEscape(t){ return t.replace(/([\\`*_])/g, '\\$1'); }
+function mdEscape(t){ return t.replace(/([\\`*_~\[\]<])/g, '\\$1'); }
+function mdGuardLines(t){
+  // a prose line must not open with a block marker, or renderers — and our
+  // own importer — read it as structure (heading, quote, list item)
+  return t.split('\n').map(l =>
+    l.replace(/^(\s{0,3})(#{1,6}(?=[ \t])|>|[-+](?=[ \t]))/, '$1\\$2')
+     .replace(/^(\s{0,3})(\d{1,9})([.)])(?=[ \t])/, '$1$2\\$3')
+  ).join('\n');
+}
 function mdInline(node){
   let out = '';
   node.childNodes.forEach(n => {
@@ -1925,10 +1933,16 @@ function mdInline(node){
       return;
     }
     const inner = mdInline(n);
+    // CommonMark rejects emphasis whose delimiter touches a space — move
+    // boundary whitespace outside the markers ('<b>bold </b>x' → '**bold** x')
+    const wrapM = d => {
+      const m = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      return m[1] + d + m[2] + d + m[3];
+    };
     switch(n.tagName){
-      case 'B': case 'STRONG': out += inner.trim() ? `**${inner}**` : inner; break;
-      case 'I': case 'EM': out += inner.trim() ? `*${inner}*` : inner; break;
-      case 'S': case 'STRIKE': case 'DEL': out += inner.trim() ? `~~${inner}~~` : inner; break;
+      case 'B': case 'STRONG': out += inner.trim() ? wrapM('**') : inner; break;
+      case 'I': case 'EM': out += inner.trim() ? wrapM('*') : inner; break;
+      case 'S': case 'STRIKE': case 'DEL': out += inner.trim() ? wrapM('~~') : inner; break;
       case 'U': out += inner.trim() ? `<u>${inner}</u>` : inner; break;
       case 'SPAN': out += inner; break; // small caps → plain text in md
       case 'BR': out += '  \n'; break;
@@ -1942,21 +1956,21 @@ function mdFromDoc(doc){
   tpl.innerHTML = doc || '';
   let out = '';
   tpl.content.childNodes.forEach(n => {
-    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) out += mdEscape(t) + '\n\n'; return; }
+    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) out += mdGuardLines(mdEscape(t)) + '\n\n'; return; }
     if(n.nodeType !== 1) return;
     const tag = n.tagName;
     if(tag === 'DIV' && n.classList.contains('asterism')){ out += '⁂\n\n'; return; }
-    if(tag === 'P' || tag === 'DIV'){ const t = mdInline(n).trim(); out += (t ? t : '') + '\n\n'; return; }
+    if(tag === 'P' || tag === 'DIV'){ const t = mdGuardLines(mdInline(n).trim()); out += (t ? t : '') + '\n\n'; return; }
     if(tag === 'H2'){ out += '### ' + mdInline(n).trim() + '\n\n'; return; }
     if(tag === 'H3'){ out += '#### ' + mdInline(n).trim() + '\n\n'; return; }
     if(tag === 'BLOCKQUOTE'){
-      const t = mdInline(n).trim().split('\n').map(l => '> ' + l).join('\n');
+      const t = mdInline(n).trim().split('\n').map(l => '> ' + mdGuardLines(l)).join('\n');
       out += t + '\n\n'; return;
     }
     if(tag === 'UL' || tag === 'OL'){
       let i = 1;
       n.querySelectorAll(':scope > li').forEach(li => {
-        out += (tag === 'UL' ? '- ' : `${i++}. `) + mdInline(li).trim() + '\n';
+        out += (tag === 'UL' ? '- ' : `${i++}. `) + mdGuardLines(mdInline(li).trim()) + '\n';
       });
       out += '\n'; return;
     }
@@ -1964,7 +1978,7 @@ function mdFromDoc(doc){
     // inline node here; serialize it through a wrapper so its own tag counts
     const wrap = document.createElement('div');
     wrap.appendChild(n.cloneNode(true));
-    const t = mdInline(wrap).trim(); if(t) out += t + '\n\n';
+    const t = mdGuardLines(mdInline(wrap).trim()); if(t) out += t + '\n\n';
   });
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -3438,6 +3452,10 @@ function inlineMD(text){
     }catch(e){}
     return all;
   });
+  // backslash-escaped punctuation is literal text — shield it from the mark
+  // regexes, then restore it, so the app's own exports round-trip faithfully
+  const lits = [];
+  src = src.replace(/\\([\\`*_~\[\]<>#+.\-])/g, (_, c) => { lits.push(c); return `\u0000LT${lits.length - 1}\u0000`; });
   let h = esc(src);
   h = h.replace(/~~([^~\n]+)~~/g, '<s>$1</s>');
   h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
@@ -3445,6 +3463,7 @@ function inlineMD(text){
   h = h.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?…]|$)/g, '$1<i>$2</i>');
   h = h.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?…]|$)/g, '$1<i>$2</i>');
   h = h.replace(/`([^`\n]+)`/g, '$1');
+  h = h.replace(/\u0000LT(\d+)\u0000/g, (_, i) => esc(lits[+i]));
   h = h.replace(/\u0000TN(\d+)\u0000/g, (_, i) => {
     const t = stash[+i];
     return t ? tspanHTML(t.lang, t.src) : '';
@@ -4071,9 +4090,15 @@ $('#import-input').addEventListener('change', async e => {
 });
 
 /* ================= backup / restore ================= */
-function backupAll(){
+async function backupAll(){
   flushSave();
   const payload = { app: 'tenebrae-writer', version: state.version, exportedAt: new Date().toISOString(), state };
+  // the engine HTML lives under its own kv key — without it a backup cannot
+  // revive an imported codex on a fresh device
+  if(omniPack()){
+    const engine = window.__codexEngineHTML || await kvGet('codexEngine');
+    if(engine) payload.codexEngine = engine;
+  }
   const stamp = new Date().toISOString().slice(0, 10);
   download(`tenebrae-backup-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
 }
@@ -4085,7 +4110,13 @@ function offerRestore(text){
     confirmSheet('Restore this backup?', `${plural(st.books.length, 'book')} — replaces everything currently here.`, 'Restore', () => {
       state = st;
       state.codex = state.codex || null;
-      if(state.codex && validateCodex(state.codex)) state.codex = null;
+      // omni-host packs carry no languages[] — same exemption as the boot guard
+      if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null;
+      if(data.codexEngine && state.codex && state.codex.kind === 'omni-host'){
+        omniTeardown();
+        window.__codexEngineHTML = data.codexEngine;
+        kvSet('codexEngine', data.codexEngine);
+      }
       lastLangId = null;
       flushSave();
       registerCodexFonts();

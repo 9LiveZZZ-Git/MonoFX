@@ -320,7 +320,7 @@ put everything in missed[].`,
 ]);
 
 return {
-  artifactSha256: '8b20d9a08d4aff5066e1e88a90b0aa48f9a941119f17c5aafd70790c8b75e15e',
+  artifactSha256: 'ed617a45f18e474ccdd3b85260e499872ee0ff2d9652c0aaa0c57938f813c4c8',
   findings: merged,
   anomalies,
   auditorsLost: lost,

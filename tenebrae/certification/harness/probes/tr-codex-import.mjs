@@ -1,27 +1,25 @@
 // TR-5 — Codex import surface, functional, in three parts.
+// (Rewritten for the post-4c9ebd1 artifact: the engine-wake poll chain is
+// single now, ensureOmni removes its iframe on failure, omniPatchHTML seals
+// the srcdoc with a CSP so the codex's external @import fails fast instead of
+// hanging — the real codex is expected to wake through the pure UI with no
+// test-seam assistance. The earlier revision of this probe documented the
+// pre-fix wake failure and used the __omniInjected seam; that narrative is
+// preserved in git history.)
 //
 // PART A  Baseline: sample-codex span in a scene; sample fonts registered
-//         via FontFace at boot.
-// PART B  Codex Pack (JSON with an embedded font) — the path the file input
-//         advertises. Pure UI: library menu → Tenebrae Codex… → Import →
-//         chooser. Verifies validation, badge clear, FontFace registration
-//         (document.fonts + computed font-style flips italic→normal), span
-//         re-render, removal restores the sample engine.
-// PART C  The REAL Codex Omnilingua HTML (3.4 MB, scratchpad; not committed).
-//         Measured in this headless Chromium: the hidden srcdoc iframe needs
-//         ~13-15 s to parse+boot, but ensureOmni()'s wake budget is 250 polls
-//         shared by TWO interleaved 60 ms chains (the iframe 'load' listener
-//         fires early for the initial about:blank document), so the budget
-//         expires after ~8 s wall clock — the pure-UI wake deterministically
-//         fails HERE (toast "engine didn't wake"), while the orphaned iframe
-//         finishes booting a few seconds later and is never adopted. On real
-//         hardware the parse is far faster; to certify the rest of the
-//         pipeline in this environment the probe adopts the app's own
-//         fully-booted orphan iframe through the artifact's designed test
-//         seam (window.__omniInjected, step1.html L2311 "// test seam") and
-//         re-imports through the real UI, which then runs the full success
-//         path (toast "N tongues awake", rerenderAllSpans). Everything else
-//         is the artifact's own code against the real codex engine.
+//         via FontFace at boot (document.fonts).
+// PART B  Codex Pack (JSON with an embedded font). Pure UI: library menu →
+//         Tenebrae Codex… → Import → chooser. Verifies validation, badge
+//         clear, FontFace registration (document.fonts + computed font-style
+//         flips italic→normal), span re-render, removal restores the sample.
+// PART C  The REAL Codex Omnilingua HTML (3.4 MB, scratchpad; not committed),
+//         imported through the real UI with no seam. Verifies the wake toast,
+//         sample-disclosure clear, span re-render against the real engine
+//         (data-omni + SVG glyph decoration), deterministic translation for
+//         every engine tongue (repeat calls AND across a reload), RTL via the
+//         real Kerrackian wing, and that removing the codex restores the
+//         sample engine and re-renders spans back.
 // Run: cd probes && node tr-codex-import.mjs
 import { readFile, writeFile } from 'node:fs/promises';
 import { launch, wait, createBook, insertTranslationSpan, verdict } from './ex-lib.mjs';
@@ -41,7 +39,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     languages: [
       { id: 'celan-basic', name: 'Probe Celan', fontFamily: 'Probe Rune Font', dir: 'ltr',
         script: { base: 0xE100, digraphs: { th: 26, sh: 27, ch: 28, ck: 29 } },
-        shift: [['s', 'z'], ['m', 'b'], ['a', 'o']], affix: { plural: 'ux', past: 'or', prog: 'ел'.normalize ? 'el' : 'el' } },
+        shift: [['s', 'z'], ['m', 'b'], ['a', 'o']], affix: { plural: 'ux', past: 'or', prog: 'el' } },
       { id: 'probe-rtl', name: 'Probe RTL', fontFamily: 'Probe Rune Font', dir: 'rtl',
         shift: [['e', 'a']], affix: { plural: 'ak' } },
     ],
@@ -54,6 +52,8 @@ const { srv, browser, page, errors } = await launch();
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
 const checks = [];
 const anomalies = [];
+const external = [];
+page.on('request', r => { if (!r.url().startsWith('http://127.0.0.1')) external.push(r.url()); });
 
 async function importFile(path){
   await page.click('#lib-more');
@@ -67,6 +67,17 @@ async function importFile(path){
   await chooser.setFiles(path);
 }
 const toastText = () => page.evaluate(() => document.querySelector('#toast').textContent);
+// wait until the toast matches re, up to ~timeoutS seconds; returns {t, seconds}
+async function awaitToast(re, timeoutS){
+  const t0 = Date.now();
+  let t = '';
+  while ((Date.now() - t0) / 1000 < timeoutS) {
+    t = await toastText();
+    if (re.test(t)) break;
+    await sleep(500);
+  }
+  return { t, seconds: ((Date.now() - t0) / 1000).toFixed(1) };
+}
 
 /* ============ PART A — baseline ============ */
 await createBook(page, 'Codex Book');
@@ -144,49 +155,13 @@ console.log('[B] after pack removal:', JSON.stringify(packGone));
 checks.push(has('[B] pack removal restores the sample engine (7 tongues, badge back, rom back)',
   packGone.n === 7 && packGone.sampleNote && packGone.rom === before.rom));
 
-/* ============ PART C — the real Codex Omnilingua HTML ============ */
-const tImport = Date.now();
+/* ============ PART C — the real Codex Omnilingua HTML, pure UI ============ */
 await importFile(CODEX);
-console.log('[C] real codex handed to the chooser; watching the wake attempt…');
-let wake = null, failToastAt = null, engineUpAt = null;
-for (let i = 0; i < 20; i++) {
-  await sleep(3000);
-  wake = await page.evaluate(() => {
-    const frs = [...document.querySelectorAll('iframe')].map(f => {
-      try { const w = f.contentWindow;
-        return { id: f.id, ready: w && w.document ? w.document.readyState : null,
-                 up: !!(w && w.CODEX && w.FAMILY && typeof w.translateE2C === 'function') };
-      } catch (e) { return { id: f.id, err: true }; }
-    });
-    return { toast: document.querySelector('#toast').textContent, frs };
-  });
-  const el = ((Date.now() - tImport) / 1000).toFixed(0);
-  console.log(`[C] +${el}s toast=${JSON.stringify(wake.toast)} frames=${JSON.stringify(wake.frs)}`);
-  if (!failToastAt && /didn.t wake/.test(wake.toast)) failToastAt = el;
-  if (!engineUpAt && wake.frs.some(f => f.up)) { engineUpAt = el; break; }
-}
-console.log(`[C] measured: failure toast at ~${failToastAt}s; engine actually up in the iframe at ~${engineUpAt}s`);
-if (failToastAt) anomalies.push(`pure-UI wake failed at ~${failToastAt}s while the codex booted at ~${engineUpAt}s (fixed poll budget)`);
-checks.push(has('[C] the real codex boots inside the app’s own iframe (engine objects present)', !!engineUpAt));
-
-// Adopt the app's own booted orphan via the artifact's designed test seam,
-// then re-import through the real UI so the full success path runs.
-const adopted = await page.evaluate(() => {
-  const fr = [...document.querySelectorAll('iframe')].find(f => {
-    try { const w = f.contentWindow; return w && w.CODEX && w.FAMILY && typeof w.translateE2C === 'function'; }
-    catch (e) { return false; }
-  });
-  if (!fr) return false;
-  fr.id = 'omni-orphan-adopted';           // keep it out of omniTeardown's reach
-  window.__omniInjected = fr.contentWindow; // artifact's own test seam (L2311)
-  return true;
-});
-checks.push(has('[C] adopted the app-booted engine via the artifact test seam', adopted));
-await importFile(CODEX);
-await sleep(6000);
-const okToast = await toastText();
-console.log('[C] toast after seam-assisted re-import:', JSON.stringify(okToast));
-checks.push(has('[C] import success path ran (“tongues awake” toast)', /awake/.test(okToast)));
+const wake = await awaitToast(/awake|didn.t wake|Couldn/, 60);
+console.log(`[C] wake outcome after ${wake.seconds}s:`, JSON.stringify(wake.t));
+checks.push(has('[C] real codex imports and wakes through the pure UI (“tongues awake” toast)',
+  /awake/.test(wake.t) && !/didn.t wake/.test(wake.t)));
+if (!/awake/.test(wake.t)) anomalies.push(`pure-UI wake did not complete in ${wake.seconds}s: ${wake.t}`);
 
 const seam = await page.evaluate(async () => {
   const { langs, note } = await window.tenebrae.langs();
@@ -240,7 +215,7 @@ console.log('[C] celan_basic:', (d1['celan_basic'] || '').slice(0, 120));
 console.log('[C] kerrackian:', (d1['kerrackian'] || '').slice(0, 120));
 checks.push(has('[C] real-engine translation deterministic across repeat calls (all tongues)', sameRepeat));
 
-// UI selection→translate against the real engine
+// UI selection→translate against the real engine (Kerrackian = RTL wing)
 await page.evaluate(() => {
   const ed = document.querySelector('#ed-content');
   const walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
@@ -275,32 +250,30 @@ console.log('[C] UI-inserted omni span:', JSON.stringify(newSpan));
 checks.push(has('[C] UI selection→translate works against the real engine',
   !!newSpan && newSpan.omni === '1' && !!newSpan.rom));
 
-// determinism across a reload with the real engine
+// determinism + engine boot across a reload with the codex installed
 await wait(page, 1500);
 const errsBeforeReload = errors.length;
 await page.reload();
-console.log('[C] reloaded with the codex active; waiting for the boot-time iframe…');
-let rebootUp = false;
-for (let i = 0; i < 20; i++) {
-  await sleep(3000);
-  rebootUp = await page.evaluate(() => [...document.querySelectorAll('iframe')].some(f => {
-    try { const w = f.contentWindow; return w && w.CODEX && w.FAMILY && typeof w.translateE2C === 'function'; }
-    catch (e) { return false; }
-  }));
-  if (rebootUp) break;
+console.log('[C] reloaded with the codex active; waiting for the engine to answer…');
+let rebootRom = null;
+for (let i = 0; i < 40; i++) {
+  await sleep(1500);
+  rebootRom = await page.evaluate(async () => {
+    try { const r = await window.tenebrae.translate2('celan_basic', 'gate'); return r ? r.romanization : null; }
+    catch (e) { return null; }
+  });
+  if (rebootRom) break;
 }
 const bootErrors = errors.slice(errsBeforeReload);
-console.log('[C] engine up after reload:', rebootUp, '| pageerrors during reload boot:', JSON.stringify(bootErrors));
+console.log('[C] engine answers after reload:', JSON.stringify(rebootRom),
+  '| pageerrors during reload boot:', bootErrors.length ? JSON.stringify(bootErrors) : 'none');
 if (bootErrors.length) anomalies.push('boot-with-codex pageerrors: ' + bootErrors.join(' | '));
-checks.push(has('[C] codex persists across reload (kind omni-host)',
-  await page.evaluate(() => { const c = window.tenebrae.codex(); return c && c.kind === 'omni-host'; })));
-await page.evaluate(() => {
-  const fr = [...document.querySelectorAll('iframe')].find(f => {
-    try { const w = f.contentWindow; return w && w.CODEX && w.FAMILY && typeof w.translateE2C === 'function'; }
-    catch (e) { return false; }
-  });
-  if (fr) { fr.id = 'omni-orphan-adopted-2'; window.__omniInjected = fr.contentWindow; }
-});
+checks.push(
+  has('[C] codex persists across reload (kind omni-host)',
+      await page.evaluate(() => { const c = window.tenebrae.codex(); return c && c.kind === 'omni-host'; })),
+  has('[C] engine reboots from IndexedDB after reload (translate2 answers)', !!rebootRom),
+  has('[C] no page exceptions booting with the codex installed', bootErrors.length === 0),
+);
 const d3 = await detSnap();
 let sameReload = ids.length === Object.keys(d3).length && ids.length > 0;
 for (const k of ids) if (d1[k] !== d3[k]) { sameReload = false; console.log('[C] RELOAD MISMATCH', k, '\n  before:', (d1[k] || '').slice(0, 140), '\n  after :', (d3[k] || '').slice(0, 140)); }
@@ -338,11 +311,11 @@ console.log('[C] span after removal:', JSON.stringify(spanRestored));
 checks.push(has('[C] spans re-render back to the sample engine after removal',
   !!spanRestored && spanRestored.omni === null && spanRestored.rom === before.rom));
 
+if (external.length) anomalies.push('external request attempts: ' + external.slice(0, 5).join(', '));
+console.log('external request attempts:', external.length ? external.map(u => u.slice(0, 80)) : 'none');
 console.log('ANOMALIES:', anomalies.length ? anomalies : 'none');
 console.log('pageerrors (all):', errors.length ? errors : 'none');
-verdict('TR-5 (functional checks)', checks.every(Boolean));
-console.log('NOTE: pure-UI wake of the 3.4MB codex fails in headless Chromium (budget ~8s < boot ~13-15s);');
-console.log('PART C used the artifact’s own __omniInjected test seam to adopt the app-booted iframe.');
+verdict('TR-5', checks.every(Boolean) && errors.length === 0);
 
 await browser.close();
 await srv.close();
