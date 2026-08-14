@@ -1088,6 +1088,9 @@ function applyNav(){
     const el = scr[key];
     const idx = navStack.indexOf(key);
     el.classList.remove('on', 'under');
+    // stacking must follow the navigation order, not the fixed CSS hierarchy —
+    // editor→card layers the card above the editor it was opened from
+    el.style.zIndex = idx > -1 ? String(idx + 1) : '';
     if(key === top) el.classList.add('on');
     else if(idx > -1) el.classList.add('under');
   }
@@ -2537,6 +2540,12 @@ function selTextFromRange(range){
     const holder = document.createElement('div');
     holder.appendChild(range.cloneContents());
     holder.querySelectorAll('.tspan').forEach(t => t.textContent = t.dataset.rom || '');
+    // textContent carries no block separators \u2014 a cross-paragraph selection
+    // would fuse its boundary words without these
+    holder.querySelectorAll('p,div,h2,h3,blockquote,li,br').forEach(b => {
+      b.before(document.createTextNode(' '));
+      b.after(document.createTextNode(' '));
+    });
     return (holder.textContent || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
   }catch(e){ return ''; }
 }
