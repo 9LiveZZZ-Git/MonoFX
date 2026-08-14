@@ -864,7 +864,7 @@ body.zen #zen-exit{display:flex}
 <div id="sheet"></div>
 <div id="toast"></div>
 <input type="file" id="restore-input" accept="application/json,.json" style="display:none">
-<input type="file" id="codex-input" accept=".json,.zip,.codexpack,application/json,application/zip" style="display:none">
+<input type="file" id="codex-input" accept=".html,.htm,.json,.zip,.codexpack,text/html,application/json,application/zip" style="display:none">
 <input type="file" id="import-input" style="display:none"
   accept=".md,.markdown,.txt,.text,.html,.htm,.docx,.doc,.rtf,.epub,.json,text/plain,text/markdown,text/html,application/rtf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
 
@@ -990,6 +990,9 @@ function scheduleSave(){
   saveTimer = setTimeout(flushSave, 500);
 }
 function flushSave(){
+  // keystrokes younger than the input debounce live only in the editor DOM —
+  // pull them into state before snapshotting, or a hide+discard loses them
+  try{ persistEditor(); persistCard(); }catch(e){}
   clearTimeout(saveTimer); saveTimer = null;
   kvSet('state', JSON.parse(JSON.stringify(state)));
 }
@@ -1059,6 +1062,16 @@ function sanitizeHTML(html){
     el.remove();
   }
   walk(frag);
+  // contenteditable leaves the first typed line as a bare top-level run;
+  // exporters can only see paragraphs, so every stray inline run gets a <p>
+  const TOP_BLOCK = /^(P|H2|H3|BLOCKQUOTE|UL|OL|DIV)$/;
+  let run = null;
+  for(const node of Array.from(frag.childNodes)){
+    if(node.nodeType === 1 && TOP_BLOCK.test(node.tagName)){ run = null; continue; }
+    if(!run && node.nodeType === 3 && !node.nodeValue.trim()){ node.remove(); continue; }
+    if(!run){ run = document.createElement('p'); frag.insertBefore(run, node); }
+    run.appendChild(node);
+  }
   const out = document.createElement('div');
   out.appendChild(frag);
   return out.innerHTML;
@@ -1947,7 +1960,11 @@ function mdFromDoc(doc){
       });
       out += '\n'; return;
     }
-    const t = mdInline(n).trim(); if(t) out += t + '\n\n';
+    // docs saved before top-level runs were wrapped can still carry a bare
+    // inline node here; serialize it through a wrapper so its own tag counts
+    const wrap = document.createElement('div');
+    wrap.appendChild(n.cloneNode(true));
+    const t = mdInline(wrap).trim(); if(t) out += t + '\n\n';
   });
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -1956,7 +1973,20 @@ function plainFromDoc(doc){
   tpl.innerHTML = doc || '';
   tpl.querySelectorAll('div.asterism').forEach(d => d.textContent = '\n⁂\n');
   tpl.querySelectorAll('.tspan').forEach(t => t.textContent = t.dataset.rom || t.textContent);
-  return textOf(tpl).replace(/\n{3,}/g, '\n\n').trim();
+  // innerText of a detached element has no block separators — walk blocks explicitly
+  const BLOCKS = /^(P|DIV|H2|H3|BLOCKQUOTE|UL|OL)$/;
+  let out = '';
+  (function walk(n){
+    n.childNodes.forEach(c => {
+      if(c.nodeType === 3){ out += c.nodeValue; return; }
+      if(c.nodeType !== 1) return;
+      if(c.tagName === 'BR'){ out += '\n'; return; }
+      walk(c);
+      if(c.tagName === 'LI'){ out += '\n'; return; }
+      if(BLOCKS.test(c.tagName)) out += '\n\n';
+    });
+  })(tpl);
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function compile(book, kind){
@@ -1966,14 +1996,14 @@ function compile(book, kind){
     ? { md: '\n\n⁂\n\n', txt: '\n\n⁂\n\n', html: '<p style="text-align:center;letter-spacing:.3em">⁂</p>' }
     : { md: '\n\n', txt: '\n\n', html: '<p><br></p>' };
   const parts = [];
-  if(kind === 'md') parts.push('# ' + book.title);
+  if(kind === 'md') parts.push('# ' + mdEscape(book.title));
   else if(kind === 'txt') parts.push(book.title.toUpperCase());
   else parts.push(`<h1>${esc(book.title)}</h1>`);
 
   book.chapters.forEach(ch => {
     const chunk = [];
     if(o.chapterTitles){
-      if(kind === 'md') chunk.push('## ' + ch.title);
+      if(kind === 'md') chunk.push('## ' + mdEscape(ch.title));
       else if(kind === 'txt') chunk.push(ch.title.toUpperCase());
       else chunk.push(`<h2>${esc(ch.title)}</h2>`);
     }
@@ -1982,7 +2012,7 @@ function compile(book, kind){
                : kind === 'txt' ? plainFromDoc(s.doc)
                : transformExportHTML(s.doc);
       if(o.sceneTitles && s.title){
-        if(kind === 'md') body = '### ' + s.title + '\n\n' + body;
+        if(kind === 'md') body = '### ' + mdEscape(s.title) + '\n\n' + body;
         else if(kind === 'txt') body = s.title + '\n\n' + body;
         else body = `<h3>${esc(s.title)}</h3>` + body;
       }
@@ -1997,7 +2027,7 @@ function compile(book, kind){
 function sceneExportData(kind){
   const s = currentScene(); if(!s) return null;
   const title = s.title || 'Untitled scene';
-  if(kind === 'md') return { name: fileSafe(title) + '.md', text: (s.title ? '### ' + s.title + '\n\n' : '') + mdFromDoc(s.doc) };
+  if(kind === 'md') return { name: fileSafe(title) + '.md', text: (s.title ? '### ' + mdEscape(s.title) + '\n\n' : '') + mdFromDoc(s.doc) };
   if(kind === 'txt') return { name: fileSafe(title) + '.txt', text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc) };
   return { name: title, html: (s.title ? `<h2>${esc(s.title)}</h2>` : '') + transformExportHTML(s.doc), text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc) };
 }
@@ -2297,6 +2327,10 @@ const OMNI_ALIAS = { 'celan-basic': 'celan_basic', 'celan-high': 'celan_high', '
 function omniPack(){ const c = state.codex; return (c && c.kind === 'omni-host') ? c : null; }
 function omniLangId(id){ return OMNI_ALIAS[id] !== undefined ? OMNI_ALIAS[id] : id; }
 function omniPatchHTML(html){
+  // the srcdoc sandbox does not block network — a codex carrying an external
+  // @import (fonts CDN etc.) would phone home, so seal the engine with a CSP
+  const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' \'unsafe-eval\'; style-src \'unsafe-inline\'; font-src data: blob:; img-src data: blob:; media-src data: blob:">';
+  html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, m => m + csp) : csp + html;
   if(/window\.CODEX\s*=\s*\{[^}]*compileText/.test(html)) return html;
   return html.replace(/window\.CODEX\s*=\s*\{/,
     'window.CODEX = {compileText:(typeof compileText!=="undefined"?compileText:null), ' +
@@ -2318,7 +2352,7 @@ function ensureOmni(){
       fr.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       fr.setAttribute('aria-hidden', 'true');
       fr.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;pointer-events:none';
-      let tries = 0, done = false;
+      let tries = 0, done = false, polling = false;
       const poll = () => {
         if(done) return;
         let ok = false;
@@ -2328,20 +2362,23 @@ function ensureOmni(){
           if(ok) omniWin = w;
         }catch(e){}
         if(ok){ done = true; return resolve(omniWin); }
-        if(++tries > 250){ done = true; omniBooting = null; return resolve(null); }
+        if(++tries > 250){ done = true; omniBooting = null; fr.remove(); return resolve(null); }
         setTimeout(poll, 60);
       };
-      fr.addEventListener('load', poll);
+      // one chain only: load + the fallback timer would otherwise interleave
+      // and burn the try budget twice as fast
+      const startPoll = () => { if(!polling && !done){ polling = true; poll(); } };
+      fr.addEventListener('load', startPoll);
       document.body.appendChild(fr);
       fr.srcdoc = omniPatchHTML(html);
-      setTimeout(poll, 400);
+      setTimeout(startPoll, 400);
     });
   })();
   return omniBooting;
 }
 function omniTeardown(){
-  const fr = document.getElementById('omni-host');
-  if(fr) fr.remove();
+  // failed boots may have left more than one host — remove them all
+  document.querySelectorAll('iframe#omni-host').forEach(f => f.remove());
   omniWin = null; omniBooting = null; omniMatchers = {};
   window.__codexEngineHTML = null;
 }
@@ -2597,7 +2634,8 @@ function codexFontCSS(){
     document.head.appendChild(style);
   }
   const codex = codexActive();
-  style.textContent = codex.languages.map(l =>
+  // an omni-host pack has no languages[] — its spans are drawn by the engine, not font CSS
+  style.textContent = (Array.isArray(codex.languages) ? codex.languages : []).map(l =>
     `.tspan[data-lang="${l.id}"]{font-family:'${String(l.fontFamily || '').replace(/'/g, "\\'")}',var(--serif);font-style:${codexFontsLoaded.has(l.fontFamily) ? 'normal' : 'italic'}}`
   ).join('\n');
 }
@@ -2658,14 +2696,16 @@ async function importCodexPack(file){
     let pack = null;
     if(/\.(zip|codexpack)$/i.test(file.name)){
       if(typeof DecompressionStream === 'undefined'){ toast('ZIP packs need iOS 16.4+ — import the .json instead'); return; }
-      const entries = await unzipAll(new Uint8Array(await file.arrayBuffer()));
-      const jsonEntry = entries.find(e => /(^|\/)codex.*\.json$/i.test(e.name)) || entries.find(e => /\.json$/i.test(e.name));
-      if(!jsonEntry){ toast('No codex .json inside the pack'); return; }
-      pack = JSON.parse(new TextDecoder().decode(jsonEntry.data));
+      // unzipAll wants the ArrayBuffer itself and returns Map(name → bytes)
+      const files = await unzipAll(await file.arrayBuffer());
+      const names = [...files.keys()];
+      const jsonName = names.find(n => /(^|\/)codex.*\.json$/i.test(n)) || names.find(n => /\.json$/i.test(n));
+      if(!jsonName){ toast('No codex .json inside the pack'); return; }
+      pack = JSON.parse(new TextDecoder().decode(files.get(jsonName)));
       const fonts = [];
-      for(const e of entries){
-        const m = e.name.match(/([^\/]+)\.(ttf|otf|woff2)$/i);
-        if(m) fonts.push({ family: m[1], format: m[2].toLowerCase(), data: b64FromBytes(e.data) });
+      for(const [n, data] of files){
+        const m = n.match(/([^\/]+)\.(ttf|otf|woff2)$/i);
+        if(m) fonts.push({ family: m[1], format: m[2].toLowerCase(), data: b64FromBytes(data) });
       }
       if(fonts.length) pack.fonts = fonts;
     }else{

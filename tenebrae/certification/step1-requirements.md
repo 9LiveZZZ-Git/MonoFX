@@ -1,7 +1,7 @@
 # Tenebrae Writer — Step 1 Certification Standard
 
 **Artifact under certification:** `tenebrae/step1.html`
-(sha256 `3e993df2e43c855fc2a93183ef8a9ba4bf790293890600e0b4481035bfc63235`, 4,234 lines, single-file app)
+(sha256 `8b20d9a08d4aff5066e1e88a90b0aa48f9a941119f17c5aafd70790c8b75e15e`, 4274 lines, single-file app)
 
 **Reference documents:** `tenebrae/spec.md` (product & technical specification), the
 artifact's own declared scope (header comment line 15, About sheet line 1757, export
