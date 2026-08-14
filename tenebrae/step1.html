@@ -3434,6 +3434,12 @@ function isChapterHeadingLine(line){
 function plainOfHTML(html){
   const t = document.createElement('template');
   t.innerHTML = String(html || '');
+  // textContent has no block separators — 'KaelHe' at a block junction would
+  // hide a mention from the word-boundary scan
+  t.content.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,br').forEach(b => {
+    b.before(document.createTextNode(' '));
+    b.after(document.createTextNode(' '));
+  });
   return (t.content.textContent || '').trim();
 }
 function htmlWords(html){
