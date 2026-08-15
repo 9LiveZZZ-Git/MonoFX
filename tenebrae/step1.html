@@ -12,7 +12,7 @@
 <title>Tenebrae Writer</title>
 <style>
 /* ============================================================
-   TENEBRAE WRITER — step 1
+   TENEBRAE WRITER — step 2
    Manuscript editor · Book → Chapter → Scene · offline-first
    Type: New York (ui-serif) carries the words, SF whispers the chrome.
    Mark: ⁂ the asterism — scene break, focus exit, empty state.
@@ -1770,7 +1770,7 @@ $('#lib-more').addEventListener('click', () => {
     { label: 'Tenebrae Codex…', icon: ICONS.rune, onTap: codexSheet },
     { label: 'Back up everything (.json)', icon: ICONS.json, onTap: backupAll },
     { label: 'Restore from backup…', icon: ICONS.restore, immediate: true, onTap: () => $('#restore-input').click() },
-    { note: `Tenebrae Writer · step 1 — offline manuscript editor.<br>${esc(storageLabel())}. Autosaves as you write.<br>Import reads .md, .txt, .docx, .rtf, .epub and .html.` }
+    { note: `Tenebrae Writer · step 2 — offline manuscript editor.<br>${esc(storageLabel())}. Autosaves as you write.<br>Import reads .md, .txt, .docx, .rtf, .epub and .html.<br>Export writes .md, .txt, .docx and .epub.` }
   ]);
 });
 
@@ -2143,7 +2143,16 @@ function exportSheet(scope){
         if(isBook) download(fileSafe(b.title) + '.txt', compile(b, 'txt'), 'text/plain');
         else { const d = sceneExportData('txt'); if(d) download(d.name, d.text, 'text/plain'); }
       } },
+    { label: 'Download Word (.docx)', icon: ICONS.txt, onTap: () => {
+        if(isBook) download(fileSafe(b.title) + '.docx', docxFile(b, 'book'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.docx', docxFile(b, 'scene', s), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); }
+      } },
   );
+  if(isBook){
+    items.push(
+      { label: 'Download EPUB (.epub)', icon: ICONS.book, onTap: () => download(fileSafe(b.title) + '.epub', epubFile(b), 'application/epub+zip') },
+    );
+  }
   if(isBook && (b.cards || []).length){
     items.push(
       { label: 'Story bible (.md)', icon: ICONS.cards, onTap: () => download(fileSafe(b.title) + ' — story bible.md', storyBibleMD(b), 'text/markdown') },
@@ -2151,9 +2160,254 @@ function exportSheet(scope){
     );
   }
   items.push(
-    { note: 'Rich copy keeps headings, bold and italics when pasted into Apple Notes. DOCX and EPUB arrive in a later step.' }
+    { note: 'Rich copy keeps headings, bold and italics when pasted into Apple Notes. Tenebrae passages export as italic romanization; PDF and true-glyph typesetting arrive in a later step.' }
   );
   actionSheet(`Export — ${title}`, items);
+}
+
+/* ================= DOCX export =================
+   OOXML written by hand against the app's own store-only zip writer, so the
+   single-file / zero-dependency / offline architecture holds. Style ids are
+   chosen to round-trip through docxToBlocks: Title, Heading1 (chapter),
+   Heading2 (scene), Heading3/4 (in-scene H2/H3), Quote, ListBullet/ListNumber. */
+function docxRunsFrom(node, inherit){
+  const runs = [];
+  const emit = (text, m) => {
+    if(!text) return;
+    let rpr = '';
+    if(m.b) rpr += '<w:b/>';
+    if(m.i) rpr += '<w:i/>';
+    if(m.sc) rpr += '<w:smallCaps/>';
+    if(m.s) rpr += '<w:strike/>';
+    if(m.u) rpr += '<w:u w:val="single"/>';
+    runs.push(`<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`);
+  };
+  const walk = (n, m) => {
+    n.childNodes.forEach(c => {
+      if(c.nodeType === 3){ emit(c.nodeValue, m); return; }
+      if(c.nodeType !== 1) return;
+      const tag = c.tagName;
+      if(tag === 'BR'){ runs.push('<w:r><w:br/></w:r>'); return; }
+      if(tag === 'SPAN' && c.classList.contains('tspan')){
+        // romanization in italics — glyph fidelity is the v1 spike, never raw PUA here
+        emit(c.dataset.rom || c.textContent, Object.assign({}, m, { i: true }));
+        return;
+      }
+      const m2 = Object.assign({}, m);
+      if(tag === 'B' || tag === 'STRONG') m2.b = true;
+      else if(tag === 'I' || tag === 'EM') m2.i = true;
+      else if(tag === 'U') m2.u = true;
+      else if(tag === 'S' || tag === 'STRIKE' || tag === 'DEL') m2.s = true;
+      else if(tag === 'SPAN' && c.classList.contains('sc')) m2.sc = true;
+      walk(c, m2);
+    });
+  };
+  walk(node, inherit || {});
+  return runs;
+}
+function docxPara(runs, opt){
+  const o = opt || {};
+  let ppr = '';
+  if(o.style) ppr += `<w:pStyle w:val="${o.style}"/>`;
+  if(o.num) ppr += `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${o.num}"/></w:numPr>`;
+  if(o.jc) ppr += `<w:jc w:val="${o.jc}"/>`;
+  return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${runs.join('')}</w:p>`;
+}
+const docxTextP = (text, opt) => docxPara([`<w:r><w:t xml:space="preserve">${esc(text)}</w:t></w:r>`], opt);
+
+function docxScenePs(doc){
+  const tpl = document.createElement('template');
+  tpl.innerHTML = doc || '';
+  const ps = [];
+  tpl.content.childNodes.forEach(n => {
+    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) ps.push(docxTextP(t)); return; }
+    if(n.nodeType !== 1) return;
+    const tag = n.tagName;
+    if(tag === 'DIV' && n.classList.contains('asterism')){ ps.push(docxTextP('⁂', { jc: 'center' })); return; }
+    if(tag === 'H2'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Heading3' })); return; }
+    if(tag === 'H3'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Heading4' })); return; }
+    if(tag === 'BLOCKQUOTE'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Quote' })); return; }
+    if(tag === 'UL' || tag === 'OL'){
+      n.querySelectorAll(':scope > li').forEach(li =>
+        ps.push(docxPara(docxRunsFrom(li), tag === 'UL' ? { style: 'ListBullet', num: 1 } : { style: 'ListNumber', num: 2 })));
+      return;
+    }
+    ps.push(docxPara(docxRunsFrom(n)));
+  });
+  return ps;
+}
+function docxBodyXML(book, scope, scene){
+  const o = book.exportOpts || defaultExportOpts();
+  const ps = [];
+  if(scope === 'book'){
+    ps.push(docxTextP(book.title, { style: 'Title' }));
+    book.chapters.forEach(ch => {
+      if(o.chapterTitles) ps.push(docxTextP(ch.title, { style: 'Heading1' }));
+      const scenes = [];
+      ch.scenes.forEach(s => {
+        const body = docxScenePs(s.doc);
+        if(!body.length && !s.title) return;
+        scenes.push({ title: s.title, body });
+      });
+      scenes.forEach((s, i) => {
+        if(i > 0 && o.asterism) ps.push(docxTextP('⁂', { jc: 'center' }));
+        if(o.sceneTitles && s.title) ps.push(docxTextP(s.title, { style: 'Heading2' }));
+        ps.push.apply(ps, s.body);
+      });
+    });
+  }else{
+    if(scene.title) ps.push(docxTextP(scene.title, { style: 'Heading2' }));
+    ps.push.apply(ps, docxScenePs(scene.doc));
+  }
+  return ps.join('');
+}
+const DOCX_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const DOCX_STATIC = {
+  ct: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>`,
+  rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+  docRels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>`,
+  styles: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:styles xmlns:w="${DOCX_W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="288" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="480" w:after="240"/><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="44"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="360" w:after="160"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="3"/></w:pPr><w:rPr><w:b/><w:i/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720" w:right="720"/></w:pPr><w:rPr><w:i/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListBullet"><w:name w:val="List Bullet"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="ListNumber"><w:name w:val="List Number"/><w:basedOn w:val="Normal"/></w:style></w:styles>`,
+  numbering: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:numbering xmlns:w="${DOCX_W}"><w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>`
+};
+function docxFile(book, scope, scene){
+  const body = docxBodyXML(book, scope, scene) +
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>';
+  const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="${DOCX_W}"><w:body>${body}</w:body></w:document>`;
+  return zipStore([
+    { name: '[Content_Types].xml', data: DOCX_STATIC.ct },
+    { name: '_rels/.rels', data: DOCX_STATIC.rels },
+    { name: 'word/_rels/document.xml.rels', data: DOCX_STATIC.docRels },
+    { name: 'word/styles.xml', data: DOCX_STATIC.styles },
+    { name: 'word/numbering.xml', data: DOCX_STATIC.numbering },
+    { name: 'word/document.xml', data: docXml },
+  ]);
+}
+
+/* ================= EPUB export =================
+   EPUB 3 via the same zip writer (mimetype first, stored — required). XHTML is
+   built in a real XML document and serialized, so it is well-formed by
+   construction. Translation spans are written as span.tspan with their data
+   attributes: the app's own EPUB importer restores them as live spans, making
+   the EPUB round trip lossless for conlang source text. */
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+function epubXhtml(title, build){
+  const d = document.implementation.createDocument(XHTML_NS, 'html', null);
+  const head = d.createElementNS(XHTML_NS, 'head');
+  const t = d.createElementNS(XHTML_NS, 'title');
+  t.textContent = title || ' ';
+  const link = d.createElementNS(XHTML_NS, 'link');
+  link.setAttribute('rel', 'stylesheet'); link.setAttribute('type', 'text/css'); link.setAttribute('href', 'style.css');
+  head.appendChild(t); head.appendChild(link);
+  const body = d.createElementNS(XHTML_NS, 'body');
+  d.documentElement.appendChild(head);
+  d.documentElement.appendChild(body);
+  build(d, body);
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n' + new XMLSerializer().serializeToString(d);
+}
+function epubSceneInto(d, body, sceneDoc){
+  const mk = tag => d.createElementNS(XHTML_NS, tag);
+  const inline = (src, dst) => {
+    src.childNodes.forEach(c => {
+      if(c.nodeType === 3){ dst.appendChild(d.createTextNode(c.nodeValue)); return; }
+      if(c.nodeType !== 1) return;
+      const tag = c.tagName;
+      if(tag === 'BR'){ dst.appendChild(mk('br')); return; }
+      if(tag === 'SPAN' && c.classList.contains('tspan')){
+        const s = mk('span');
+        s.setAttribute('class', 'tspan');
+        if(c.dataset.lang) s.setAttribute('data-lang', c.dataset.lang);
+        if(c.dataset.src) s.setAttribute('data-src', c.dataset.src);
+        if(c.dataset.rom) s.setAttribute('data-rom', c.dataset.rom);
+        if(c.getAttribute('dir') === 'rtl') s.setAttribute('dir', 'rtl');
+        s.textContent = c.dataset.rom || c.textContent; // romanization, never raw glyphs
+        dst.appendChild(s);
+        return;
+      }
+      let el = null;
+      if(tag === 'B' || tag === 'STRONG') el = mk('b');
+      else if(tag === 'I' || tag === 'EM') el = mk('i');
+      else if(tag === 'U') el = mk('u');
+      else if(tag === 'S' || tag === 'STRIKE' || tag === 'DEL') el = mk('s');
+      else if(tag === 'SPAN' && c.classList.contains('sc')){ el = mk('span'); el.setAttribute('class', 'sc'); }
+      if(el){ inline(c, el); dst.appendChild(el); }
+      else inline(c, dst);
+    });
+  };
+  const tpl = document.createElement('template');
+  tpl.innerHTML = sceneDoc || '';
+  tpl.content.childNodes.forEach(n => {
+    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t){ const p = mk('p'); p.textContent = t; body.appendChild(p); } return; }
+    if(n.nodeType !== 1) return;
+    const tag = n.tagName;
+    if(tag === 'DIV' && n.classList.contains('asterism')){ const p = mk('p'); p.setAttribute('class', 'ast'); p.textContent = '⁂'; body.appendChild(p); return; }
+    if(tag === 'UL' || tag === 'OL'){
+      const list = mk(tag.toLowerCase());
+      n.querySelectorAll(':scope > li').forEach(li => { const l = mk('li'); inline(li, l); list.appendChild(l); });
+      body.appendChild(list);
+      return;
+    }
+    const el = tag === 'H2' ? mk('h3') : tag === 'H3' ? mk('h4') : tag === 'BLOCKQUOTE' ? mk('blockquote') : mk('p');
+    inline(n, el);
+    body.appendChild(el);
+  });
+}
+function epubChapterXHTML(ch, o){
+  return epubXhtml(ch.title || ' ', (d, body) => {
+    if(o.chapterTitles && ch.title){ const h = d.createElementNS(XHTML_NS, 'h1'); h.textContent = ch.title; body.appendChild(h); }
+    const scenes = ch.scenes.filter(s => (s.doc && s.doc.trim()) || s.title);
+    scenes.forEach((s, i) => {
+      if(i > 0 && o.asterism){ const p = d.createElementNS(XHTML_NS, 'p'); p.setAttribute('class', 'ast'); p.textContent = '⁂'; body.appendChild(p); }
+      if(o.sceneTitles && s.title){ const h = d.createElementNS(XHTML_NS, 'h2'); h.textContent = s.title; body.appendChild(h); }
+      epubSceneInto(d, body, s.doc);
+    });
+  });
+}
+function epubNavXHTML(chapters){
+  return epubXhtml('Contents', (d, body) => {
+    const nav = d.createElementNS(XHTML_NS, 'nav');
+    nav.setAttributeNS('http://www.idpf.org/2007/ops', 'epub:type', 'toc');
+    const h = d.createElementNS(XHTML_NS, 'h1');
+    h.textContent = 'Contents';
+    nav.appendChild(h);
+    const ol = d.createElementNS(XHTML_NS, 'ol');
+    chapters.forEach((ch, i) => {
+      const li = d.createElementNS(XHTML_NS, 'li');
+      const a = d.createElementNS(XHTML_NS, 'a');
+      a.setAttribute('href', `ch${i + 1}.xhtml`);
+      a.textContent = ch.title || `Chapter ${i + 1}`;
+      li.appendChild(a); ol.appendChild(li);
+    });
+    nav.appendChild(ol);
+    body.appendChild(nav);
+  });
+}
+const EPUB_CSS = `body{font-family:Georgia,'Iowan Old Style',serif;line-height:1.6;margin:1em auto;max-width:36em;padding:0 1em}
+h1,h2,h3,h4{font-weight:700;line-height:1.25}
+blockquote{margin:1em 2em;font-style:italic}
+.ast{text-align:center;letter-spacing:.3em;margin:1.6em 0}
+.sc{font-variant:small-caps}
+.tspan{font-style:italic}
+.tspan[dir="rtl"]{unicode-bidi:isolate}`;
+function epubFile(book){
+  const o = book.exportOpts || defaultExportOpts();
+  const chapters = book.chapters.filter(ch => ch.title || ch.scenes.some(s => (s.doc && s.doc.trim()) || s.title));
+  const entries = [
+    { name: 'mimetype', data: 'application/epub+zip' }, // must be first + stored
+    { name: 'META-INF/container.xml', data: `<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>` },
+  ];
+  const manifest = ['<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>', '<item id="css" href="style.css" media-type="text/css"/>'];
+  const spine = [];
+  chapters.forEach((ch, i) => {
+    entries.push({ name: `OEBPS/ch${i + 1}.xhtml`, data: epubChapterXHTML(ch, o) });
+    manifest.push(`<item id="ch${i + 1}" href="ch${i + 1}.xhtml" media-type="application/xhtml+xml"/>`);
+    spine.push(`<itemref idref="ch${i + 1}"/>`);
+  });
+  // dcterms:modified derives from the book's own stamp — identical state, identical bytes
+  const modified = new Date(book.updated || book.created || 0).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  entries.push({ name: 'OEBPS/nav.xhtml', data: epubNavXHTML(chapters) });
+  entries.push({ name: 'OEBPS/style.css', data: EPUB_CSS });
+  entries.push({ name: 'OEBPS/content.opf', data: `<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="en"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:tenebrae:${esc(book.id)}</dc:identifier><dc:title>${esc(book.title)}</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">${modified}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>` });
+  return zipStore(entries);
 }
 
 /* ================= tenebrae translation ================= */

@@ -1,7 +1,8 @@
 // vp-PR3+EX6 — two cheap functional demonstrations of statically-certified claims:
 //   PR-3: navigator.storage.persist() is actually INVOKED at boot (spy installed
 //         before the app script runs).
-//   EX-6: the "DOCX and EPUB arrive in a later step" disclosure renders in BOTH
+//   EX-6 (as amended by step 2 / X2-11): DOCX+EPUB now EXIST as export items;
+//   the honest scope disclosure now names PDF + true-glyph typesetting, in BOTH
 //         export-sheet scopes — book scope AND scene scope (the static evidence
 //         says the note is appended unconditionally; prove it for each).
 // Run: cd probes && node vp-pr3-ex6-boot.mjs
@@ -50,8 +51,8 @@ await page.waitForTimeout(400);
 await page.click('#ed-share');
 await page.waitForTimeout(450);
 let sheetText = await page.locator('#sheet').innerText();
-ok('EX-6: scene export sheet carries the DOCX/EPUB disclosure',
-  /DOCX and EPUB arrive in a later step/.test(sheetText));
+ok('EX-6/X2-11: scene sheet offers Word (.docx) and carries the PDF disclosure',
+  /Word \(\.docx\)/.test(sheetText) && /PDF and true-glyph typesetting arrive in a later step/.test(sheetText));
 const sceneHasOpts = /Include chapter titles/.test(sheetText);
 console.log('scene sheet shows book options (expected false):', sceneHasOpts);
 await page.keyboard.press('Escape');
@@ -65,8 +66,8 @@ await page.waitForTimeout(500);
 await page.click('#bk-share');
 await page.waitForTimeout(450);
 sheetText = await page.locator('#sheet').innerText();
-ok('EX-6: book export sheet carries the DOCX/EPUB disclosure',
-  /DOCX and EPUB arrive in a later step/.test(sheetText));
+ok('EX-6/X2-11: book sheet offers Word (.docx) + EPUB (.epub) and carries the PDF disclosure',
+  /Word \(\.docx\)/.test(sheetText) && /EPUB \(\.epub\)/.test(sheetText) && /PDF and true-glyph typesetting arrive in a later step/.test(sheetText));
 ok('no page exceptions', errors.length === 0);
 
 const pass = checks.every(c => c[1]);
