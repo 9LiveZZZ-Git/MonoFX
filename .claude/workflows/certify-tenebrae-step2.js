@@ -3,7 +3,7 @@ export const meta = {
   description: 'Certify Tenebrae Writer step 2 (DOCX + EPUB export) against its standard, with step-1 regression gate',
   whenToUse: 'Re-run whenever tenebrae/step1.html changes to re-certify step 2.',
   phases: [
-    { title: 'Audit', detail: '3 static auditors + 3 functional testers over the X2 requirements + regression gate' },
+    { title: 'Audit', detail: '4 static auditors + 4 functional testers over the X2 requirements + regression gate' },
     { title: 'Adversarial', detail: 'refute pass claims, refute fail claims, coverage critic' },
   ],
 }
@@ -30,10 +30,14 @@ Ground rules:
 - Statuses: pass | partial | fail | blocked (blocked = could not verify; say exactly why).
 - Report EVERY assigned requirement ID exactly once in findings[]; extra observations go in
   anomalies[]. Be adversarial: your job is to find where step 2 is NOT complete.
-- The new export code lives in the "DOCX export" and "EPUB export" sections of step1.html
-  (search for those banners); the existing reference probe is
-  ${HARNESS}/probes/s2-export-roundtrip.mjs (33 checks, known green — do not merely re-run
-  it and call that your evidence; probe what it does NOT cover).
+- The new code lives in the "DOCX export", "EPUB export", and "script font forge"
+  sections of step1.html (search for those banners). The script-as-text model is
+  deliberate: an imported codex's scripts are FORGED into real TTFs and spans carry PUA
+  TEXT (data-scr) — PUA in the EPUB is intentional and travels with embedded fonts;
+  PUA in the DOCX is a defect (romanization there). Known-green reference probes:
+  s2-export-roundtrip.mjs, s2-glyph-script.mjs, s2-undo-translation.mjs,
+  s2-codex-fidelity.mjs — do not merely re-run them and call that your evidence;
+  probe what they do NOT cover.
 `;
 
 const FUNC_CTX = `Functional probe rules:
@@ -132,6 +136,38 @@ step-2 change modified or now calls differently (exportSheet, zipStore usage, do
 and verify none of the step-1 requirement behaviors changed semantics. Prefix "static:".`,
   },
   {
+    label: 'static:forge',
+    prompt: `${CTX}
+Assigned requirement IDs: X2-13 (static half), X2-14 (static half).
+Method: STATIC inspection of the "script font forge" section (forgeFlattenPath/
+forgeCapsule/forgeGlyphContours/forgeTTF/omniMatchWord/forgeOmniFonts/omniScriptText/
+omniScriptCSS/omniScriptFor) plus the undo-aware editing helpers (edApplyHTML/edApplyText/
+placeTSpan/retranslateSpan and the revert/remove sheet actions). For X2-14: verify the TTF
+table construction against the TrueType spec (head/hhea/maxp field counts, cmap format 4
+segment math incl. the 0xFFFF terminator, loca long format, glyf point flags, checksums +
+checkSumAdjustment), determinism (no Date/random anywhere in the forge), correct PUA base
+assignment and matchWord parity with the codex's own tokenizer, canonical ordering rules
+(RTL and btt-stave reversals), CSS writing-mode wiring and the [data-omni] specificity
+note, and sanitizer persistence of data-scr/data-flow (length caps). For X2-13: verify
+every span mutation path routes through execCommand and identify any remaining raw Range
+mutation that would bypass undo. Prefix evidence "static:".`,
+  },
+  {
+    label: 'func:editor-ux',
+    prompt: `${CTX}
+${FUNC_CTX}
+Assigned requirement IDs: X2-13, X2-14 (functional).
+The canonical probes cover the main flows. Your probes (prefix s2-ux-*) must cover what
+they do NOT: undo across MIXED operations (type, translate, type more, retranslate — a
+single Ctrl+Z sequence must walk back cleanly without corrupting prose); undo immediately
+after a codex import re-renders spans; script text SELECTABILITY and clipboard copy (the
+PUA text should reach the clipboard); tongue-sheet big render is text (no svg) under both
+engines; sample->codex->removal transitions keep spans as text with correct fonts at each
+stage; and the vertical flows' geometry (a cols-rtl span must be taller than wide; two
+words must produce two columns). Real 3.4MB codex at
+/tmp/claude-0/-home-user-MonoFX/6e76713a-e052-5f67-a07d-369d6ef8c673/scratchpad/codex.html.`,
+  },
+  {
     label: 'func:docx',
     prompt: `${CTX}
 ${FUNC_CTX}
@@ -149,7 +185,10 @@ export through the real import UI.`,
     prompt: `${CTX}
 ${FUNC_CTX}
 Assigned requirement IDs: X2-6, X2-7, X2-8, X2-9, X2-10 (functional).
-Beyond the canonical probe (prefix s2-epub-*): XML-special + unicode titles through OPF,
+Beyond the canonical probe (prefix s2-epub-*): fonts — every embedded .ttf in the EPUB
+must parse (python3 fontTools), be manifested with media-type font/ttf, be referenced by an
+@font-face, and cover the PUA codepoints the spans use; spans carry script text with
+data-rom metadata. Then: XML-special + unicode titles through OPF,
 nav, and xhtml (well-formed, titles exact after round-trip); an RTL Kerrackian span — the
 exported xhtml must carry dir="rtl" on the tspan and the css unicode-bidi rule, and
 re-import must restore a live RTL span; option toggles reflected in the xhtml stream;
