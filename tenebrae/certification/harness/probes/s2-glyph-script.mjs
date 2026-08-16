@@ -105,18 +105,24 @@ await page.evaluate(() => { // fresh line to translate
 await insertTranslationSpan(page, 'long road', 'Kildaren');   // btt-stave in the real codex
 await insertTranslationSpan(page, 'drover walks', 'Celan High'); // cols-rtl
 const omniSpans = await page.evaluate(() => [...document.querySelectorAll('#ed-content .tspan[data-omni]')].map(sp => ({
-  lang: sp.dataset.lang, svgGlyphs: sp.querySelectorAll('svg').length,
-  vertical: sp.querySelectorAll('.tn-w.v').length, dir: sp.getAttribute('dir'),
-  looseText: [...sp.childNodes].filter(n => n.nodeType === 3).map(n => n.nodeValue).join('').trim(),
+  lang: sp.dataset.lang, flow: sp.dataset.flow || null, svg: sp.querySelectorAll('svg').length,
+  scrPUA: sp.dataset.scr ? [...sp.dataset.scr].filter(c => c.charCodeAt(0) >= 0xE000 && c.charCodeAt(0) <= 0xF8FF).length : 0,
+  textIsScr: sp.textContent === sp.dataset.scr,
+  family: getComputedStyle(sp).fontFamily, wm: getComputedStyle(sp).writingMode,
 })));
 console.log('omni spans:', JSON.stringify(omniSpans, null, 1));
-ck('imported-codex spans draw SVG glyphs', omniSpans.length >= 2 && omniSpans.every(sp => sp.svgGlyphs > 0));
-ck('vertical script (btt-stave / cols-rtl) tokens carry the vertical class', omniSpans.some(sp => sp.vertical > 0), JSON.stringify(omniSpans.map(sp => `${sp.lang}:${sp.vertical}v`)));
-ck('no bare romanization text outside the glyphs', omniSpans.every(sp => sp.looseText.length === 0), JSON.stringify(omniSpans.map(sp => sp.looseText)));
+ck('imported-codex spans are TEXT — zero SVG', omniSpans.length >= 2 && omniSpans.every(sp => sp.svg === 0));
+ck('spans carry forged-font PUA script text', omniSpans.every(sp => sp.scrPUA > 0 && sp.textIsScr));
+ck('spans use the forged fonts', omniSpans.every(sp => /Tenebrae Omni|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(omniSpans.map(sp => sp.family)));
+ck('vertical flows via writing-mode (cols-rtl -> vertical-rl, btt-stave -> vertical-lr)',
+   omniSpans.some(sp => sp.flow === 'cols-rtl' && sp.wm === 'vertical-rl') || omniSpans.some(sp => sp.flow === 'btt-stave' && sp.wm === 'vertical-lr'),
+   JSON.stringify(omniSpans.map(sp => `${sp.lang}:${sp.flow}:${sp.wm}`)));
+const forgedFonts = await page.evaluate(() => [...document.fonts].filter(f => /Tenebrae Omni/.test(f.family)).map(f => `${f.family}:${f.status}`));
+ck('forged fonts registered and loaded', forgedFonts.length >= 5 && forgedFonts.every(f => /loaded/.test(f)), JSON.stringify(forgedFonts));
 
-// the older sample spans re-rendered under the codex too
+// the older sample spans re-rendered under the codex too — as text
 const rerendered = await page.evaluate(() => [...document.querySelectorAll('#ed-content .tspan')].map(sp => ({ lang: sp.dataset.lang, omni: sp.dataset.omni, svg: sp.querySelectorAll('svg').length })));
-ck('pre-existing spans re-rendered as codex glyphs', rerendered.filter(r => r.omni === '1').length === rerendered.length, JSON.stringify(rerendered));
+ck('pre-existing spans re-rendered as codex TEXT spans', rerendered.every(r => r.omni === '1' && r.svg === 0), JSON.stringify(rerendered));
 
 ck('no page exceptions', errors.length === 0, errors.join(' | '));
 verdict('X2-14 glyph-script', checks.every(c => c[1]));

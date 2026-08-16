@@ -1025,10 +1025,14 @@ function sanitizeHTML(html){
           t.dataset.lang = String(child.dataset.lang).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
           t.dataset.src = String(child.dataset.src).slice(0, 2000);
           t.dataset.rom = String(child.dataset.rom || '').slice(0, 4000);
+          if(child.dataset.scr) t.dataset.scr = String(child.dataset.scr).slice(0, 4000);
+          if(child.dataset.flow) t.dataset.flow = String(child.dataset.flow).replace(/[^a-z-]/g, '').slice(0, 16);
           if(child.dataset.omni) t.dataset.omni = '1';
           if(child.getAttribute('dir') === 'rtl') t.setAttribute('dir', 'rtl');
           t.setAttribute('contenteditable', 'false');
-          t.textContent = child.dataset.omni ? (child.dataset.rom || '') : (child.textContent || child.dataset.rom || '');
+          t.textContent = child.dataset.omni
+            ? (child.dataset.scr || child.dataset.rom || '')
+            : (child.textContent || child.dataset.rom || '');
           child.replaceWith(t); continue;
         }
         const sc = child.classList.contains('sc') || /small-caps/.test(child.getAttribute('style') || '');
@@ -2150,7 +2154,11 @@ function exportSheet(scope){
   );
   if(isBook){
     items.push(
-      { label: 'Download EPUB (.epub)', icon: ICONS.book, onTap: () => download(fileSafe(b.title) + '.epub', epubFile(b), 'application/epub+zip') },
+      { label: 'Download EPUB (.epub)', icon: ICONS.book, onTap: async () => {
+          // forge the codex script fonts first so they can ride inside the EPUB
+          if(omniPack()){ try{ const w = await ensureOmni(); if(w) forgeOmniFonts(w); }catch(e){} }
+          download(fileSafe(b.title) + '.epub', epubFile(b), 'application/epub+zip');
+        } },
     );
   }
   if(isBook && (b.cards || []).length){
@@ -2318,8 +2326,12 @@ function epubSceneInto(d, body, sceneDoc){
         if(c.dataset.lang) s.setAttribute('data-lang', c.dataset.lang);
         if(c.dataset.src) s.setAttribute('data-src', c.dataset.src);
         if(c.dataset.rom) s.setAttribute('data-rom', c.dataset.rom);
+        if(c.dataset.flow) s.setAttribute('data-flow', c.dataset.flow);
         if(c.getAttribute('dir') === 'rtl') s.setAttribute('dir', 'rtl');
-        s.textContent = c.dataset.rom || c.textContent; // romanization, never raw glyphs
+        // the script itself travels as TEXT — the EPUB embeds the script fonts;
+        // romanization rides along as metadata for readers without them
+        const scr = c.dataset.scr || (c.dataset.omni ? null : c.textContent);
+        s.textContent = scr || c.dataset.rom || c.textContent;
         dst.appendChild(s);
         return;
       }
@@ -2386,8 +2398,37 @@ h1,h2,h3,h4{font-weight:700;line-height:1.25}
 blockquote{margin:1em 2em;font-style:italic}
 .ast{text-align:center;letter-spacing:.3em;margin:1.6em 0}
 .sc{font-variant:small-caps}
-.tspan{font-style:italic}
-.tspan[dir="rtl"]{unicode-bidi:isolate}`;
+.tspan{font-style:normal}
+.tspan[dir="rtl"]{unicode-bidi:isolate}
+.tspan[data-flow="cols-rtl"]{writing-mode:vertical-rl;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}
+.tspan[data-flow="btt-stave"]{writing-mode:vertical-lr;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`;
+function epubFontEntries(){
+  // every script font the book's spans could need: the sample TTFs, fonts from
+  // an imported JSON pack, and the fonts forged from an imported codex
+  const fonts = [];
+  for(const f of (SAMPLE_CODEX.fonts || [])){
+    try{ fonts.push({ family: f.family, bytes: Uint8Array.from(atob(f.data), c => c.charCodeAt(0)) }); }catch(e){}
+  }
+  const c = state.codex;
+  if(c && Array.isArray(c.fonts)) for(const f of c.fonts){
+    try{ fonts.push({ family: f.family, bytes: Uint8Array.from(atob(f.data), ch => ch.charCodeAt(0)) }); }catch(e){}
+  }
+  if(omniForged) for(const f of Object.values(omniForged)) fonts.push({ family: f.family, bytes: f.ttf });
+  const seen = new Set();
+  return fonts.filter(f => { if(!f.bytes || seen.has(f.family)) return false; seen.add(f.family); return true; });
+}
+function epubLangCSS(){
+  const rules = [];
+  for(const l of SAMPLE_CODEX.languages) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${l.fontFamily}'}`);
+  const c = state.codex;
+  if(c && Array.isArray(c.languages)) for(const l of c.languages)
+    if(l.fontFamily) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${String(l.fontFamily).replace(/'/g, '')}'}`);
+  if(omniForged){
+    for(const [langId, f] of Object.entries(omniForged)) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${f.family}'}`);
+    rules.push(`.tspan[data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes'}`);
+  }
+  return rules.join('\n');
+}
 function epubFile(book){
   const o = book.exportOpts || defaultExportOpts();
   const chapters = book.chapters.filter(ch => ch.title || ch.scenes.some(s => (s.doc && s.doc.trim()) || s.title));
@@ -2405,9 +2446,317 @@ function epubFile(book){
   // dcterms:modified derives from the book's own stamp — identical state, identical bytes
   const modified = new Date(book.updated || book.created || 0).toISOString().replace(/\.\d{3}Z$/, 'Z');
   entries.push({ name: 'OEBPS/nav.xhtml', data: epubNavXHTML(chapters) });
-  entries.push({ name: 'OEBPS/style.css', data: EPUB_CSS });
+  // the script travels as text; its fonts travel with it
+  const fonts = epubFontEntries();
+  const faces = fonts.map((f, i) => {
+    entries.push({ name: `OEBPS/fonts/f${i + 1}.ttf`, data: f.bytes });
+    manifest.push(`<item id="font${i + 1}" href="fonts/f${i + 1}.ttf" media-type="font/ttf"/>`);
+    return `@font-face{font-family:'${f.family}';src:url('fonts/f${i + 1}.ttf') format('truetype')}`;
+  });
+  entries.push({ name: 'OEBPS/style.css', data: faces.join('\n') + '\n' + EPUB_CSS + '\n' + epubLangCSS() });
   entries.push({ name: 'OEBPS/content.opf', data: `<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="en"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:tenebrae:${esc(book.id)}</dc:identifier><dc:title>${esc(book.title)}</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">${modified}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>` });
   return zipStore(entries);
+}
+
+/* ================= script font forge =================
+   The imported codex describes each script as stroke-skeleton glyph paths
+   (absolute M/L/C/Q/H/V on a 100-grid, stroke-width 8, round caps/joins —
+   verified across all five scripts). So the scripts can stay TEXT — selectable,
+   copyable, exportable, never SVG in the prose — the writer forges a real
+   TrueType font per script at wake time: flatten each stroke, emit every
+   segment as a round-capped capsule contour (uniform winding; nonzero fill
+   unions them into the stroked glyph), and assemble the tables by hand.
+   Deterministic: the same codex always forges the same bytes. */
+const FORGE_BASES = { celan_high: 0xE500, kerrackian: 0xE580, kildaren: 0xE600, calgridarian: 0xE680, evernessian: 0xE700 };
+let omniForged = null; // langId -> { family, base, matcher, flow, keys }
+
+function forgeFlattenPath(d){
+  const toks = d.match(/-?\d*\.?\d+|[MLHVCQ]/g) || [];
+  const subs = [];
+  let cur = null, x = 0, y = 0, i = 0;
+  while(i < toks.length){
+    const c = toks[i];
+    if(!/[MLHVCQ]/.test(c)){ i++; continue; }
+    i++;
+    if(c === 'M'){ x = +toks[i++]; y = +toks[i++]; cur = [[x, y]]; subs.push(cur); }
+    else if(c === 'L'){ x = +toks[i++]; y = +toks[i++]; cur && cur.push([x, y]); }
+    else if(c === 'H'){ x = +toks[i++]; cur && cur.push([x, y]); }
+    else if(c === 'V'){ y = +toks[i++]; cur && cur.push([x, y]); }
+    else if(c === 'C'){
+      const x1 = +toks[i++], y1 = +toks[i++], x2 = +toks[i++], y2 = +toks[i++], x3 = +toks[i++], y3 = +toks[i++];
+      for(let t = 1; t <= 10; t++){
+        const u = t / 10, v = 1 - u;
+        cur && cur.push([v*v*v*x + 3*v*v*u*x1 + 3*v*u*u*x2 + u*u*u*x3, v*v*v*y + 3*v*v*u*y1 + 3*v*u*u*y2 + u*u*u*y3]);
+      }
+      x = x3; y = y3;
+    }
+    else if(c === 'Q'){
+      const x1 = +toks[i++], y1 = +toks[i++], x2 = +toks[i++], y2 = +toks[i++];
+      for(let t = 1; t <= 8; t++){
+        const u = t / 8, v = 1 - u;
+        cur && cur.push([v*v*x + 2*v*u*x1 + u*u*x2, v*v*y + 2*v*u*y1 + u*u*y2]);
+      }
+      x = x2; y = y2;
+    }
+  }
+  return subs.filter(s => s.length);
+}
+function forgeCapsule(a, b, hw, out){
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+  const c = [];
+  if(L < 1e-6){
+    for(let s = 0; s < 12; s++){ const t = s / 12 * 2 * Math.PI; c.push([a[0] + hw * Math.cos(t), a[1] + hw * Math.sin(t)]); }
+    out.push(c); return;
+  }
+  const th = Math.atan2(dy, dx);
+  for(let s = 0; s <= 6; s++){ const t = th - Math.PI / 2 + s / 6 * Math.PI; c.push([b[0] + hw * Math.cos(t), b[1] + hw * Math.sin(t)]); }
+  for(let s = 0; s <= 6; s++){ const t = th + Math.PI / 2 + s / 6 * Math.PI; c.push([a[0] + hw * Math.cos(t), a[1] + hw * Math.sin(t)]); }
+  out.push(c);
+}
+function forgeGlyphContours(d, transform){
+  // stroke skeleton -> filled capsule contours, then map into font units
+  const contours = [];
+  for(const sub of forgeFlattenPath(d)){
+    if(sub.length === 1) forgeCapsule(sub[0], sub[0], 4, contours);
+    for(let i = 0; i < sub.length - 1; i++) forgeCapsule(sub[i], sub[i + 1], 4, contours);
+  }
+  return contours.map(c => c.map(([x, y]) => transform(x, y)));
+}
+/* ---- TrueType assembly (quadratic glyphs, on-curve points only) ---- */
+function forgeTTF(family, glyphs, cmapPairs){
+  // glyphs: [{contours, advance}] with glyph 0 = .notdef; cmapPairs: [[code, glyphId]] ascending
+  const u16 = n => [n >> 8 & 255, n & 255];
+  const u32 = n => [n >>> 24 & 255, n >>> 16 & 255, n >>> 8 & 255, n & 255];
+  const i16 = n => u16((n + 0x10000) & 0xFFFF);
+  const bytes = arr => Uint8Array.from(arr);
+  let gXMin = 9999, gYMin = 9999, gXMax = -9999, gYMax = -9999, maxPts = 0, maxCtr = 0;
+
+  const glyfParts = [], locas = [0];
+  let glyfLen = 0;
+  for(const g of glyphs){
+    if(!g.contours.length){ locas.push(glyfLen); glyfParts.push(new Uint8Array(0)); continue; }
+    const pts = [], ends = [];
+    let xMin = 9999, yMin = 9999, xMax = -9999, yMax = -9999;
+    for(const c of g.contours){
+      for(const [px, py] of c){
+        const X = Math.round(px), Y = Math.round(py);
+        pts.push([X, Y]);
+        if(X < xMin) xMin = X; if(X > xMax) xMax = X;
+        if(Y < yMin) yMin = Y; if(Y > yMax) yMax = Y;
+      }
+      ends.push(pts.length - 1);
+    }
+    gXMin = Math.min(gXMin, xMin); gYMin = Math.min(gYMin, yMin);
+    gXMax = Math.max(gXMax, xMax); gYMax = Math.max(gYMax, yMax);
+    maxPts = Math.max(maxPts, pts.length); maxCtr = Math.max(maxCtr, g.contours.length);
+    const out = [...i16(g.contours.length), ...i16(xMin), ...i16(yMin), ...i16(xMax), ...i16(yMax)];
+    ends.forEach(e => out.push(...u16(e)));
+    out.push(...u16(0)); // no instructions
+    for(let i = 0; i < pts.length; i++) out.push(1); // on-curve flags
+    let px = 0;
+    for(const [X] of pts){ out.push(...i16(X - px)); px = X; }
+    let py = 0;
+    for(const [, Y] of pts){ out.push(...i16(Y - py)); py = Y; }
+    while(out.length % 4) out.push(0);
+    glyfLen += out.length;
+    locas.push(glyfLen);
+    glyfParts.push(bytes(out));
+  }
+  const glyf = new Uint8Array(glyfLen);
+  { let o = 0; for(const p of glyfParts){ glyf.set(p, o); o += p.length; } }
+  const loca = bytes(locas.flatMap(u32));
+  const hmtx = bytes(glyphs.flatMap(g => [...u16(g.advance), ...i16(0)]));
+  const head = bytes([
+    0, 1, 0, 0, 0, 1, 0, 0, ...u32(0), 0x5F, 0x0F, 0x3C, 0xF5, ...u16(3), ...u16(1000),
+    ...u32(0), ...u32(0), ...u32(0), ...u32(0), // dates zero: deterministic
+    ...i16(gXMin), ...i16(gYMin), ...i16(gXMax), ...i16(gYMax),
+    ...u16(0), ...u16(8), ...i16(2), ...i16(1), ...i16(0),
+  ]);
+  const hhea = bytes([
+    0, 1, 0, 0, ...i16(800), ...i16(-200), ...i16(40), ...u16(1000), ...i16(0), ...i16(0), ...i16(1000),
+    ...i16(1), ...i16(0), ...i16(0), 0, 0, 0, 0, 0, 0, 0, 0, ...i16(0), ...u16(glyphs.length),
+  ]);
+  const maxp = bytes([ // v1.0: version + 15 uint16 fields
+    0, 1, 0, 0, ...u16(glyphs.length), ...u16(maxPts), ...u16(maxCtr), ...u16(0), ...u16(0),
+    ...u16(2), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+  ]);
+  // cmap format 4 from ascending [code, gid] pairs, grouped into contiguous segments
+  const segs = [];
+  for(const [code, gid] of cmapPairs){
+    const last = segs[segs.length - 1];
+    if(last && code === last.end + 1 && gid === last.gidStart + (code - last.start)) last.end = code;
+    else segs.push({ start: code, end: code, gidStart: gid });
+  }
+  segs.push({ start: 0xFFFF, end: 0xFFFF, gidStart: 0 });
+  const segCount = segs.length, sc2 = segCount * 2;
+  let sr = 1, es = 0;
+  while(sr * 2 <= segCount){ sr *= 2; es++; }
+  const subLen = 16 + sc2 * 4;
+  const cmap = (() => {
+    const sub = [...u16(4), ...u16(subLen), ...u16(0), ...u16(sc2), ...u16(sr * 2), ...u16(es), ...u16(sc2 - sr * 2)];
+    segs.forEach(s => sub.push(...u16(s.end)));
+    sub.push(...u16(0));
+    segs.forEach(s => sub.push(...u16(s.start)));
+    segs.forEach(s => sub.push(...u16(s.start === 0xFFFF ? 1 : (s.gidStart - s.start + 0x10000) & 0xFFFF)));
+    segs.forEach(() => sub.push(...u16(0)));
+    return bytes([...u16(0), ...u16(1), ...u16(3), ...u16(1), ...u32(12), ...sub]);
+  })();
+  const os2 = bytes([ // version 0 (78 bytes)
+    ...u16(0), ...i16(500), ...u16(400), ...u16(5), ...u16(0),
+    ...new Array(20).fill(0), // y-subscript/superscript/strikeout fields (10 × int16)
+    ...i16(0), ...new Array(10).fill(0), // sFamilyClass + panose
+    ...u32(0), ...u32(0), ...u32(0), ...u32(0), // ulUnicodeRange 1-4
+    0x54, 0x4E, 0x42, 0x52, // achVendID 'TNBR'
+    ...u16(0x40), ...u16(cmapPairs[0][0]), ...u16(cmapPairs[cmapPairs.length - 1][0]),
+    ...i16(800), ...i16(-200), ...i16(60), ...u16(800), ...u16(200),
+  ]);
+  const nameStr = family;
+  const nameRecs = [[1, nameStr], [2, 'Regular'], [4, nameStr], [6, nameStr.replace(/ /g, '')]];
+  const nm = [...u16(0), ...u16(nameRecs.length), ...u16(6 + nameRecs.length * 12)];
+  let off = 0;
+  const strData = [];
+  for(const [id, s] of nameRecs){
+    const enc = [];
+    for(const ch of s) enc.push(...u16(ch.charCodeAt(0)));
+    nm.push(...u16(3), ...u16(1), ...u16(0x409), ...u16(id), ...u16(enc.length), ...u16(off));
+    strData.push(...enc); off += enc.length;
+  }
+  const name = bytes([...nm, ...strData]);
+  const post = bytes([0, 3, 0, 0, ...u32(0), ...i16(0), ...i16(0), ...u32(1), ...u32(0), ...u32(0), ...u32(0), ...u32(0)]);
+
+  const tables = [
+    ['OS/2', os2], ['cmap', cmap], ['glyf', glyf], ['head', head],
+    ['hhea', hhea], ['hmtx', hmtx], ['loca', loca], ['maxp', maxp],
+    ['name', name], ['post', post],
+  ];
+  const numT = tables.length;
+  let sr2 = 1, es2 = 0;
+  while(sr2 * 2 <= numT){ sr2 *= 2; es2++; }
+  const hdr = [...u32(0x00010000), ...u16(numT), ...u16(sr2 * 16), ...u16(es2), ...u16(numT * 16 - sr2 * 16)];
+  let pos = 12 + numT * 16;
+  const dir = [], blobs = [];
+  const csum = (u8, from, len) => {
+    let s = 0;
+    for(let i = 0; i < len; i += 4)
+      s = (s + ((u8[from + i] << 24 >>> 0) + (u8[from + i + 1] << 16) + (u8[from + i + 2] << 8) + (u8[from + i + 3] | 0))) >>> 0;
+    return s >>> 0;
+  };
+  for(const [tag, data] of tables){
+    const padded = new Uint8Array(Math.ceil(data.length / 4) * 4);
+    padded.set(data);
+    dir.push({ tag, checksum: csum(padded, 0, padded.length), offset: pos, length: data.length });
+    blobs.push(padded);
+    pos += padded.length;
+  }
+  const total = new Uint8Array(pos);
+  total.set(bytes(hdr), 0);
+  dir.forEach((d, i) => {
+    const o = 12 + i * 16;
+    for(let k = 0; k < 4; k++) total[o + k] = d.tag.charCodeAt(k);
+    total.set(bytes(u32(d.checksum)), o + 4);
+    total.set(bytes(u32(d.offset)), o + 8);
+    total.set(bytes(u32(d.length)), o + 12);
+  });
+  blobs.forEach((b, i) => total.set(b, dir[i].offset));
+  const headOff = dir.find(d => d.tag === 'head').offset;
+  const whole = csum(total, 0, Math.ceil(total.length / 4) * 4);
+  const adj = (0xB1B0AFBA - whole) >>> 0;
+  total.set(bytes(u32(adj)), headOff + 8);
+  return total;
+}
+/* greedy longest-key tokenizer — mirrors the codex's own matchWord exactly */
+function omniMatchWord(word, matcher){
+  const out = [];
+  let i = 0;
+  const w = String(word).toLowerCase();
+  while(i < w.length){
+    let hit = null;
+    for(const k of matcher.keys){ if(w.startsWith(k, i)){ hit = k; break; } }
+    if(hit){ out.push({ g: matcher.map[hit], t: hit }); i += hit.length; }
+    else { out.push({ t: w[i] }); i++; }
+  }
+  return out;
+}
+function forgeOmniFonts(w){
+  if(omniForged) return omniForged;
+  const C = w.CODEX;
+  omniForged = {};
+  for(const [langId, base] of Object.entries(FORGE_BASES)){
+    const T = C.TRANS[langId];
+    const sc = T && T.L && T.L.script;
+    if(!sc || !(sc.glyphs || []).length) continue;
+    const flow = C.scriptDir(sc);
+    const vertical = flow === 'cols-rtl' || flow === 'btt-stave';
+    // vertical scripts fill the em so stacked boxes fuse into a stave; the
+    // horizontal ones mirror the codex's 0.70em advance and 0.92 glyph scale
+    const tf = vertical
+      ? (x, y) => [Math.round(x * 10), Math.round(800 - y * 10)]
+      : (x, y) => [Math.round(70 + x * 6.44), Math.round(770 - y * 6.44)];
+    const glyphs = [{ contours: [], advance: 1000 }, { contours: [], advance: 400 }]; // .notdef, space
+    const pairs = [[0x20, 1]];
+    sc.glyphs.forEach((g, i) => {
+      glyphs.push({ contours: forgeGlyphContours(g.d, tf), advance: vertical ? 1000 : 700 });
+      pairs.push([base + i, i + 2]);
+    });
+    const family = `Tenebrae Omni ${T.L.name || langId}`;
+    const ttf = forgeTTF(family, glyphs, pairs);
+    const matcher = C.makeMatcher(sc);
+    const gidx = {};
+    sc.glyphs.forEach((g, i) => gidx[g.k.toLowerCase()] = i);
+    omniForged[langId] = { family, base, flow, ttf, matcher, gidx };
+    try{
+      const face = new FontFace(family, ttf.buffer.slice(ttf.byteOffset, ttf.byteOffset + ttf.byteLength));
+      face.load().then(f => document.fonts.add(f)).catch(() => {});
+    }catch(e){}
+  }
+  omniScriptCSS();
+  return omniForged;
+}
+/* romanization -> script text: PUA glyph runs, canonical ordering built in */
+function omniScriptText(langId, toks){
+  const f = omniForged && omniForged[langId];
+  if(!f) return null;
+  const words = [];
+  let cur = [];
+  for(const tk of toks){
+    if(tk.sep){ if(cur.length){ words.push(cur); cur = []; } continue; }
+    if(!tk.t) continue;
+    cur.push(tk);
+  }
+  if(cur.length) words.push(cur);
+  const wordStr = wtoks => wtoks.map(tk => {
+    let s = '';
+    for(const m of omniMatchWord(tk.t, f.matcher)){
+      if(m.g && f.gidx[m.g.k.toLowerCase()] != null) s += String.fromCharCode(f.base + f.gidx[m.g.k.toLowerCase()]);
+      else if(/\S/.test(m.t)) s += '·';
+    }
+    return s;
+  }).join('');
+  let strs = words.map(wordStr).filter(Boolean);
+  if(f.flow === 'rtl'){ strs = strs.map(s => [...s].reverse().join('')).reverse(); } // PUA is strong-LTR: bake canonical order in
+  if(f.flow === 'btt-stave'){ strs = strs.map(s => [...s].reverse().join('')); }    // first letter at the BOTTOM of the stave
+  const vertical = f.flow === 'cols-rtl' || f.flow === 'btt-stave';
+  return strs.join(vertical ? '\n' : ' '); // one column per word in vertical flows
+}
+function omniScriptCSS(){
+  let style = $('#omni-style');
+  if(!style){
+    style = document.createElement('style');
+    style.id = 'omni-style';
+    document.head.appendChild(style);
+  }
+  const rules = [];
+  if(omniForged){
+    // [data-omni] included: the static .tspan[data-omni][data-lang] serif rule
+    // would out-specify a bare [data-lang] selector
+    for(const [langId, f] of Object.entries(omniForged)){
+      rules.push(`.tspan[data-omni][data-lang="${langId}"]{font-family:'${f.family}';font-style:normal}`);
+    }
+    rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
+  }
+  rules.push(`.tspan[data-flow="cols-rtl"]{writing-mode:vertical-rl;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`);
+  rules.push(`.tspan[data-flow="btt-stave"]{writing-mode:vertical-lr;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`);
+  style.textContent = rules.join('\n');
 }
 
 /* ================= tenebrae translation ================= */
@@ -2650,7 +2999,7 @@ function ensureOmni(){
 function omniTeardown(){
   // failed boots may have left more than one host — remove them all
   document.querySelectorAll('iframe#omni-host').forEach(f => f.remove());
-  omniWin = null; omniBooting = null; omniMatchers = {};
+  omniWin = null; omniBooting = null; omniMatchers = {}; omniForged = null;
   window.__codexEngineHTML = null;
 }
 function omniLangs(w){
@@ -2728,9 +3077,16 @@ function decorateAll(root){
   if(!spans.length) return Promise.resolve();
   return ensureOmni().then(w => {
     if(!w) return;
+    forgeOmniFonts(w);
     spans.forEach(sp => {
       const r = omniTranslate(w, sp.dataset.lang, sp.dataset.src);
-      if(r) decorateSpanFrom(sp, r, w);
+      if(!r) return;
+      const scr = omniScriptFor(r, w);
+      if(scr){
+        sp.dataset.scr = scr;
+        if(r.flow && r.flow !== 'ltr' && r.flow !== 'rtl') sp.dataset.flow = r.flow;
+        sp.textContent = scr;
+      }
     });
   });
 }
@@ -2754,6 +3110,17 @@ function tonguesList(){
 }
 
 /* -------- span node -------- */
+function omniScriptFor(r, w){
+  // script TEXT for an omni result — the forged font's PUA run, or the sample
+  // rune mapping for Celan Basic (which has no codex glyph table of its own)
+  if(w) forgeOmniFonts(w);
+  let scr = omniScriptText(r.lang.id, r.toks || []);
+  if(!scr && r.lang.id === 'celan_basic'){
+    const sl = SAMPLE_CODEX.languages.find(l => l.id === 'celan-basic');
+    scr = scriptForm(sl, r.romanization);
+  }
+  return scr || null;
+}
 function spanFromResult(r, src, w){
   const el = document.createElement('span');
   el.className = 'tspan';
@@ -2763,8 +3130,14 @@ function spanFromResult(r, src, w){
   if(r.omni) el.dataset.omni = '1';
   if(r.dir === 'rtl') el.setAttribute('dir', 'rtl');
   el.setAttribute('contenteditable', 'false');
-  el.textContent = r.omni ? r.romanization : r.rendered;
-  if(r.omni && w) decorateSpanFrom(el, r, w);
+  if(r.omni){
+    const scr = w ? omniScriptFor(r, w) : null;
+    if(scr){
+      el.dataset.scr = scr;
+      if(r.flow && r.flow !== 'ltr' && r.flow !== 'rtl') el.dataset.flow = r.flow;
+      el.textContent = scr;
+    }else el.textContent = r.romanization; // upgraded to script by decorateAll once the engine wakes
+  }else el.textContent = r.rendered;
   return el;
 }
 function makeTSpan(langId, src){
@@ -2899,8 +3272,10 @@ function tspanSheet(el){
   resolveTranslate(langId, src).then(r => {
     if(!r){ toast('That tongue is not in this codex'); return; }
     const dirAttr = r.dir === 'rtl' ? ' dir="rtl"' : '';
+    const omniScr = r.omni ? omniScriptFor(r, omniWin) : null;
+    const flowAttr = r.omni && r.flow && r.flow !== 'ltr' && r.flow !== 'rtl' ? ` data-flow="${esc(r.flow)}"` : '';
     const bigRender = r.omni
-      ? `<div class="tsr"${dirAttr}>${r.toks.map(tk => omniTokenHTML(omniWin, r.lang.id, tk)).join(' ')}</div>`
+      ? `<div class="tsr"${dirAttr}><span class="tspan" data-lang="${esc(r.lang.id)}"${flowAttr} style="font-size:26px;line-height:1.2">${esc(omniScr || r.romanization)}</span></div>`
       : `<div style="font-size:22px;line-height:1.5;margin:2px 0 10px"><span class="tspan" data-lang="${esc(r.lang.id)}"${dirAttr}>${esc(r.rendered)}</span></div>`;
     const scriptLine = r.omni && r.script ? `<div class="ts-rom" style="opacity:.7">${esc(r.script)}${r.flow && r.flow !== 'ltr' ? ' \u00b7 ' + esc(r.flow) : ''}</div>` : '';
     actionSheet(r.lang.name, [

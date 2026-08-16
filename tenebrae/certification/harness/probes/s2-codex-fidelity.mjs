@@ -196,10 +196,12 @@ const rtlLangName = rtl.length ? ref.langs[rtl[0]].name : null;
 await insertTranslationSpan(pageB, 'old king', rtlLangName || 'Kerrackian');
 const span = await pageB.evaluate(() => {
   const sp = document.querySelector('#ed-content .tspan');
-  return sp ? { omni: sp.dataset.omni, dir: sp.getAttribute('dir'), hasSVG: !!sp.querySelector('svg path, svg use, svg g'), src: sp.dataset.src, rom: sp.dataset.rom } : null;
+  return sp ? { omni: sp.dataset.omni, dir: sp.getAttribute('dir'), svg: sp.querySelectorAll('svg').length,
+    pua: sp.dataset.scr ? [...sp.dataset.scr].some(c => c.charCodeAt(0) >= 0xE000) : false,
+    family: getComputedStyle(sp).fontFamily, src: sp.dataset.src, rom: sp.dataset.rom } : null;
 });
 console.log('editor span:', JSON.stringify(span));
-ck('editor span renders codex glyphs (SVG) with source kept', !!span && span.omni === '1' && span.hasSVG && span.src === 'old king' && !!span.rom);
+ck('editor span renders codex script as TEXT (forged font, no SVG) with source kept', !!span && span.omni === '1' && span.svg === 0 && span.pua && /Tenebrae/.test(span.family) && span.src === 'old king' && !!span.rom);
 ck('editor span carries RTL dir for RTL tongue', !rtlLangName || (span && span.dir === 'rtl'), rtlLangName ? 'tested: ' + rtlLangName : 'no rtl tongue in codex');
 
 ck('no writer page exceptions', errsB.length === 0, errsB.join(' | '));

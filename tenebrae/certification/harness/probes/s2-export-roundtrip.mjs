@@ -124,7 +124,9 @@ ck('X2-5 docx tspan: italic romanization, no PUA', /<w:i\/>[\s\S]{0,60}?meres me
 const ch1 = Buffer.from(ez.files.get('OEBPS/ch1.xhtml')).toString('utf8');
 ck('X2-7 epub ch1: h1 chapter + h2 scenes + shifted h3/h4', /<h1[^>]*>Chapter 1<\/h1>/.test(ch1) && /<h2[^>]*>First Light<\/h2>/.test(ch1) && /<h3[^>]*>heading line<\/h3>/.test(ch1) && /<h4[^>]*>sub line<\/h4>/.test(ch1));
 ck('X2-7 epub marks + sc + blockquote + lists', /<b[^>]*>bold<\/b>/.test(ch1) && /<i[^>]*>italic<\/i>/.test(ch1) && /<u[^>]*>under<\/u>/.test(ch1) && /<s[^>]*>strike<\/s>/.test(ch1) && /class="sc"[^>]*>caps/.test(ch1) && /<blockquote/.test(ch1) && /<ul[^>]*><li/.test(ch1) && /<ol[^>]*><li/.test(ch1));
-ck('X2-9 epub tspan carries data attrs + romanization, no PUA', /class="tspan"/.test(ch1) && /data-lang="celan-basic"/.test(ch1) && /data-src="sea remembers"/.test(ch1) && /meres memnerin/.test(ch1) && !PUA_RE.test(ch1));
+ck('X2-9 epub tspan carries data attrs + SCRIPT TEXT + rom metadata', /class="tspan"/.test(ch1) && /data-lang="celan-basic"/.test(ch1) && /data-src="sea remembers"/.test(ch1) && /data-rom="meres memnerin"/.test(ch1) && PUA_RE.test(ch1));
+const epubCss = Buffer.from(ez.files.get('OEBPS/style.css') || '').toString('utf8');
+ck('X2-9 epub embeds the script fonts + @font-face + lang rules', [...ez.files.keys()].some(n => /fonts\/f\d+\.ttf/.test(n)) && /@font-face/.test(epubCss) && /data-lang="celan-basic"/.test(epubCss));
 
 // ---- round-trips through the real import UI ----
 async function importFile(path, useHeadingMode){

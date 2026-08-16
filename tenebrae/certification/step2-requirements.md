@@ -50,10 +50,11 @@ static + functional, adversarially verified — AND the entire step-1 standard s
   styling present in the CSS. Compile options honored.
 - **X2-8** (F) EPUB round-trip: an exported book re-imports through the app's own .epub
   importer with the same chapters, scenes, prose, and marks.
-- **X2-9** (F) **Translation spans round-trip losslessly through EPUB**: spans are written
-  as `span.tspan` with `data-lang`/`data-src`/`data-rom` (+ `dir="rtl"` where applicable)
-  and re-import as live, re-translatable spans with source intact — better than md/txt,
-  where only romanization survives.
+- **X2-9** (F) **Translation spans round-trip losslessly through EPUB, carrying the script
+  itself as text**: spans are written as `span.tspan` holding the script's PUA text, with
+  `data-lang`/`data-src`/`data-rom` (+ `dir`/`data-flow` where applicable), the script
+  fonts embedded via `@font-face`, and per-language font + flow CSS — and re-import as
+  live, re-translatable spans with source intact.
 
 ### Cross-cutting
 - **X2-10** (F) Determinism: identical book state exports byte-identical .docx and .epub
@@ -66,11 +67,15 @@ static + functional, adversarially verified — AND the entire step-1 standard s
   span, editing its source (retranslate), changing tongue, reverting to plain text, and
   removing it are each one Cmd/Ctrl+Z away from the prior state, with redo; undone states
   persist. Raw Range mutations that bypass undo history are defects.
-- **X2-14** (F) Actual script, not styled Latin: translations render in the constructed
-  script itself — under the sample codex, PUA codepoints drawn by the embedded script
-  fonts (canvas-provable real glyphs, never tofu, never the romanization restyled); under
-  an imported codex, the codex's own glyph systems including vertical flows — with
-  romanization demoted to metadata (data-rom, gloss sheet, exports).
+- **X2-14** (F) Actual script, as TEXT, never SVG/PNG: translations render in the
+  constructed script itself and the script travels as characters — under the sample codex,
+  PUA codepoints drawn by the embedded script fonts; under an imported codex, real TTFs
+  are FORGED at wake time from the codex's own glyph vectors (deterministic bytes),
+  registered as font faces, and spans carry the script as selectable PUA text with CSS
+  writing modes for the vertical flows (cols-rtl top-to-bottom columns leftward,
+  btt-stave bottom-to-top staves) and canonical RTL letter order baked in. Zero `svg`
+  elements in any span; canvas-provable real glyphs; romanization demoted to metadata
+  (data-rom, gloss sheet, DOCX/md/txt exports).
 - **X2-12** Regression gate: every step-1 requirement (ST/ED/PR/CD/EX/IM/TR/PN) still
   passes; the full step-1 probe suite stays green against the step-2 artifact.
 
