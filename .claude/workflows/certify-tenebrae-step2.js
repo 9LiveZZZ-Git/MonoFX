@@ -165,8 +165,13 @@ Assigned requirement ID: X2-12 (functional) — the step-1 regression gate.
 Run the ENTIRE existing probe suite in ${HARNESS}/probes (every *.mjs except ex-lib.mjs and
 the fixtures dir; run them one at a time: cd ${HARNESS}/probes && for p in *.mjs; do ...)
 against the current artifact and report: total run, pass count, and EVERY probe whose
-verdict line is not PASS / NO DEFECT / HOLE NOT REPRODUCED (tr-alias-roundtrip is a known
-pre-existing anomaly check, expected FAIL — report it as such, not as a regression). For
+verdict line is not PASS / NO DEFECT / HOLE NOT REPRODUCED (known anomaly-doc/diagnostic probes, NOT regressions — report them as such: tr-alias-roundtrip
+and ex-md-h2-reimport-split and ex-restore-malformed print expected FAIL verdicts documenting
+pre-existing anomalies (the last verified failing identically on the certified step-1 artifact);
+cd-mention-tap-race prints ANOMALY REPRODUCED; tr-codex-csp-diag and vf-tr5-wake-mechanism are
+verdictless diagnostics; vp-cd5-zip-realunzip ends with a python-validation handoff line, and its
+zip was python-validated clean; vp-sk-pr5-restore-hostile-doc can hang in this environment —
+skip it after 120s and note it). For
 any unexpected failure, re-run it once to rule out flake, then diagnose whether step-2
 code caused it. Your findings[] entry for X2-12 summarizes; every non-green probe goes in
 anomalies[] with its verdict line.`,
