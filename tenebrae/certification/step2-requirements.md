@@ -62,6 +62,15 @@ static + functional, adversarially verified — AND the entire step-1 standard s
 - **X2-11** (F) Offline + principles hold: the new exporters issue zero network requests,
   contain no AI surface, and the in-app scope disclosure is updated honestly (DOCX/EPUB no
   longer "later"; PDF is the remaining deferred format).
+- **X2-13** (F) Undo: every translation operation joins the native undo stack — inserting a
+  span, editing its source (retranslate), changing tongue, reverting to plain text, and
+  removing it are each one Cmd/Ctrl+Z away from the prior state, with redo; undone states
+  persist. Raw Range mutations that bypass undo history are defects.
+- **X2-14** (F) Actual script, not styled Latin: translations render in the constructed
+  script itself — under the sample codex, PUA codepoints drawn by the embedded script
+  fonts (canvas-provable real glyphs, never tofu, never the romanization restyled); under
+  an imported codex, the codex's own glyph systems including vertical flows — with
+  romanization demoted to metadata (data-rom, gloss sheet, exports).
 - **X2-12** Regression gate: every step-1 requirement (ST/ED/PR/CD/EX/IM/TR/PN) still
   passes; the full step-1 probe suite stays green against the step-2 artifact.
 

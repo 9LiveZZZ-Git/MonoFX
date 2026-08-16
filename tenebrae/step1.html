@@ -2782,8 +2782,14 @@ function retranslateSpan(el, langId, src){
   return resolveTranslate(useLang, useSrc).then(r => {
     if(!r) return null;
     const fresh = spanFromResult(r, useSrc, omniWin);
-    el.replaceWith(fresh);
-    return fresh;
+    fresh.dataset.tsnew = '1';
+    let ok = false;
+    try{ ok = edContent.contains(el) && edApplyHTML(rangeAround(el), spanOuterHTML(fresh)); }catch(e){}
+    if(!ok){ delete fresh.dataset.tsnew; el.replaceWith(fresh); return fresh; }
+    const live = edContent.querySelector('.tspan[data-tsnew]');
+    if(live) delete live.dataset.tsnew;
+    try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
+    return live || fresh;
   });
 }
 
@@ -2831,22 +2837,53 @@ function insertTranslation(langId, src){
     placeTSpan(span, r.langName || r.lang.name);
   });
 }
+/* undo-aware span editing: every span operation goes through execCommand so
+   the browser's native undo stack can reverse it \u2014 raw Range mutations never
+   enter the undo history */
+function edApplyHTML(range, html){
+  const sel = window.getSelection();
+  edContent.focus();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return document.execCommand('insertHTML', false, html);
+}
+function edApplyText(range, text){
+  const sel = window.getSelection();
+  edContent.focus();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return text ? document.execCommand('insertText', false, text) : document.execCommand('delete', false);
+}
+function rangeAround(el){
+  const r = document.createRange();
+  r.selectNode(el);
+  return r;
+}
+function spanOuterHTML(span){
+  const holder = document.createElement('div');
+  holder.appendChild(span);
+  return holder.innerHTML;
+}
 function placeTSpan(span, langLabel){
+  span.dataset.tsnew = '1';
+  let range = (edSelRange && edContent.contains(edSelRange.commonAncestorContainer)) ? edSelRange : null;
+  if(!range){
+    try{
+      placeCaretEnd(edContent);
+      const sel = window.getSelection();
+      range = sel.rangeCount ? sel.getRangeAt(0) : null;
+    }catch(e){}
+  }
   let placed = false;
-  try{
-    if(edSelRange && edContent.contains(edSelRange.commonAncestorContainer)){
-      edSelRange.deleteContents();
-      edSelRange.insertNode(span);
-      const after = document.createTextNode('\u00A0');
-      span.parentNode.insertBefore(after, span.nextSibling);
-      placed = true;
-    }
-  }catch(e){}
-  if(!placed){
+  try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + '\u00A0'); }catch(e){}
+  if(!placed){ // last-ditch path, outside undo history
     const p = document.createElement('p');
     p.appendChild(span);
     edContent.appendChild(p);
   }
+  const live = edContent.querySelector('.tspan[data-tsnew]');
+  if(live) delete live.dataset.tsnew;
+  delete span.dataset.tsnew;
   edSelRange = null;
   try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
   syncEmpty(); updateCount(); persistEditor();
@@ -2888,11 +2925,16 @@ function tspanSheet(el){
         catch(e){ toast('Couldn\u2019t copy'); }
       } },
     { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
-        el.replaceWith(document.createTextNode(src));
+        let ok = false;
+        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el), src); }catch(e){}
+        if(!ok) el.replaceWith(document.createTextNode(src));
         persistEditor(); updateCount(); toast('Back to the source line');
       } },
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
-        el.remove(); persistEditor(); updateCount(); syncEmpty();
+        let ok = false;
+        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el), ''); }catch(e){}
+        if(!ok) el.remove();
+        persistEditor(); updateCount(); syncEmpty();
       } }
     ]);
   });
