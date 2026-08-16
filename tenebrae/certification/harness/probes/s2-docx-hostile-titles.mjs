@@ -192,6 +192,20 @@ const t1 = rb && rb.chapters[0].scenes[0].text || '';
 const t2 = rb && rb.chapters[1].scenes[0].text || '';
 ck('X2-4 hostile prose round-trips (text-exact per line)', t1.includes(BODY1A) && t1.includes(BODY1B) && t2.includes(BODY2));
 
+// ---- the hostile SCENE-scope export must also survive the real import UI ----
+const sStats = await importFile(`${OUT}/hostile-scene.docx`, true);
+console.log('scene re-import preview:', sStats);
+const rs = await readLastBook();
+console.log('scene re-imported book title:', JSON.stringify(rs && rs.title));
+console.log('scene re-imported:', JSON.stringify(rs && rs.chapters.map(c => [c.title, c.scenes.map(s => s.title)])));
+const rsScene = rs && rs.chapters[0] && rs.chapters[0].scenes[0];
+// A single-scene docx opens with its Heading2: the import preview promotes the
+// first heading to the BOOK title (step-1 title-override behavior). The title
+// text must survive SOMEWHERE exactly; prose must be text-exact.
+ck('X2-4 scene export re-imports: hostile scene title preserved EXACTLY (as scene or book title)',
+   !!rsScene && (rsScene.title === SC1_T || rs.title === SC1_T));
+ck('X2-4 scene export re-imports: hostile prose text-exact', !!rsScene && rsScene.text.includes(BODY1A) && rsScene.text.includes(BODY1B));
+
 ck('no page exceptions', errors.length === 0, errors.join(' | '));
 verdict('S2-DOCX-HOSTILE-TITLES', checks.every(c => c[1]));
 await browser.close();
