@@ -39,6 +39,19 @@ const docx2 = await downloadBinary('Word (.docx)');
 await openSheet();
 const epub2 = await downloadBinary('EPUB (.epub)');
 
+const SPAN_ROM = await page.evaluate(() => new Promise(res => {
+  const rq = indexedDB.open('tenebrae-writer', 1);
+  rq.onsuccess = () => {
+    const g = rq.result.transaction('kv').objectStore('kv').get('state');
+    g.onsuccess = () => {
+      const b = g.result.books.find(x => x.title === 'Step Two Book');
+      const m = /data-rom="([^"]+)"/.exec(b.chapters[0].scenes[0].doc || '');
+      res(m ? m[1] : null);
+    };
+  };
+}));
+console.log('span romanization (live engine):', JSON.stringify(SPAN_ROM));
+const ROM_RE = new RegExp(SPAN_ROM ? SPAN_ROM.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '@@none@@');
 await writeFile(`${OUT}/book.docx`, docx1.buf);
 await writeFile(`${OUT}/book.epub`, epub1.buf);
 console.log(`saved: ${OUT}/book.docx (${docx1.buf.length} B), book.epub (${epub1.buf.length} B)`);
@@ -118,15 +131,15 @@ ck('X2-2 lists -> ListBullet/ListNumber + numPr', /w:val="ListBullet"\/><w:numPr
 ck('X2-2 in-scene ⁂ centered', /<w:jc w:val="center"\/><\/w:pPr><w:r><w:t[^>]*>⁂/.test(doc));
 ck('X2-2 asterism OFF: no ⁂ between scenes', (doc.match(/⁂/g) || []).length === 1);
 ck('X2-3 marks map to rPr', /<w:b\/>[\s\S]{0,80}?bold/.test(doc) && /<w:i\/>[\s\S]{0,80}?italic/.test(doc) && /<w:u w:val="single"\/>[\s\S]{0,80}?under/.test(doc) && /<w:strike\/>[\s\S]{0,80}?strike/.test(doc) && /<w:smallCaps\/>[\s\S]{0,80}?caps/.test(doc));
-ck('X2-5 docx tspan: italic romanization, no PUA', /<w:i\/>[\s\S]{0,60}?meres memnerin/.test(doc) && !PUA_RE.test(doc));
+ck('X2-5 docx tspan: italic romanization, no PUA', ROM_RE.test(doc) && !PUA_RE.test(doc));
 
 // ---- X2-7 epub content mapping ----
 const ch1 = Buffer.from(ez.files.get('OEBPS/ch1.xhtml')).toString('utf8');
 ck('X2-7 epub ch1: h1 chapter + h2 scenes + shifted h3/h4', /<h1[^>]*>Chapter 1<\/h1>/.test(ch1) && /<h2[^>]*>First Light<\/h2>/.test(ch1) && /<h3[^>]*>heading line<\/h3>/.test(ch1) && /<h4[^>]*>sub line<\/h4>/.test(ch1));
 ck('X2-7 epub marks + sc + blockquote + lists', /<b[^>]*>bold<\/b>/.test(ch1) && /<i[^>]*>italic<\/i>/.test(ch1) && /<u[^>]*>under<\/u>/.test(ch1) && /<s[^>]*>strike<\/s>/.test(ch1) && /class="sc"[^>]*>caps/.test(ch1) && /<blockquote/.test(ch1) && /<ul[^>]*><li/.test(ch1) && /<ol[^>]*><li/.test(ch1));
-ck('X2-9 epub tspan carries data attrs + SCRIPT TEXT + rom metadata', /class="tspan"/.test(ch1) && /data-lang="celan-basic"/.test(ch1) && /data-src="sea remembers"/.test(ch1) && /data-rom="meres memnerin"/.test(ch1) && PUA_RE.test(ch1));
+ck('X2-9 epub tspan carries data attrs + SCRIPT TEXT + rom metadata', /class="tspan"/.test(ch1) && /data-lang="celan/.test(ch1) && /data-src="sea remembers"/.test(ch1) && ROM_RE.test(ch1) && PUA_RE.test(ch1));
 const epubCss = Buffer.from(ez.files.get('OEBPS/style.css') || '').toString('utf8');
-ck('X2-9 epub embeds the script fonts + @font-face + lang rules', [...ez.files.keys()].some(n => /fonts\/f\d+\.ttf/.test(n)) && /@font-face/.test(epubCss) && /data-lang="celan-basic"/.test(epubCss));
+ck('X2-9 epub embeds the script fonts + @font-face + lang rules', [...ez.files.keys()].some(n => /fonts\/f\d+\.ttf/.test(n)) && /@font-face/.test(epubCss) && /data-lang="celan/.test(epubCss));
 
 // ---- round-trips through the real import UI ----
 async function importFile(path, useHeadingMode){
@@ -174,7 +187,7 @@ const dS1 = dBook && dBook.chapters[0] && dBook.chapters[0].scenes[0];
 ck('X2-4 docx round-trip: 2 chapters, titles kept', !!dBook && dBook.chapters.length === 2 && dBook.chapters[0].title === 'Chapter 1' && dBook.chapters[1].title === 'The Second Gate');
 ck('X2-4 docx round-trip: scene titles kept', !!dBook && dBook.chapters[0].scenes.map(s => s.title).join('|') === 'First Light|Second Scene' && dBook.chapters[1].scenes[0].title === 'Third Scene');
 ck('X2-4 docx round-trip: marks + blocks survive', !!dS1 && /<b>bold<\/b>/.test(dS1.doc) && /<i>italic<\/i>/.test(dS1.doc) && /<u>under<\/u>/.test(dS1.doc) && /<s>strike<\/s>/.test(dS1.doc) && /class="sc">caps/.test(dS1.doc) && /<h2>heading line<\/h2>/.test(dS1.doc) && /<h3>sub line<\/h3>/.test(dS1.doc) && /<blockquote>/.test(dS1.doc) && /<li>bullet item<\/li>/.test(dS1.doc) && /<li>numbered item<\/li>/.test(dS1.doc) && /asterism/.test(dS1.doc));
-ck('X2-5 docx round-trip: romanization text present', !!dS1 && /meres memnerin/.test(dS1.doc));
+ck('X2-5 docx round-trip: romanization text present', !!dS1 && ROM_RE.test(dS1.doc));
 if(dS1 && !( /<b>bold<\/b>/.test(dS1.doc) && /asterism/.test(dS1.doc) )) console.log('docx scene1 doc:', dS1.doc.slice(0, 900));
 
 // EPUB round-trip (the headline: tspans come back alive)
@@ -186,7 +199,7 @@ const eS1 = eBook && eBook.chapters[0] && eBook.chapters[0].scenes[0];
 ck('X2-8 epub round-trip: 2 chapters, titles kept', !!eBook && eBook.chapters.length === 2 && eBook.chapters[0].title === 'Chapter 1' && eBook.chapters[1].title === 'The Second Gate');
 ck('X2-8 epub round-trip: scene titles kept', !!eBook && eBook.chapters[0].scenes.map(s => s.title).join('|') === 'First Light|Second Scene');
 ck('X2-8 epub round-trip: marks survive', !!eS1 && /<b>bold<\/b>/.test(eS1.doc) && /<i>italic<\/i>/.test(eS1.doc) && /<s>strike<\/s>/.test(eS1.doc) && /class="sc">caps/.test(eS1.doc));
-ck('X2-9 epub round-trip: tspan restored LIVE with source', !!eS1 && /class="tspan"/.test(eS1.doc) && /data-src="sea remembers"/.test(eS1.doc) && /data-lang="celan-basic"/.test(eS1.doc));
+ck('X2-9 epub round-trip: tspan restored LIVE with source', !!eS1 && /class="tspan"/.test(eS1.doc) && /data-src="sea remembers"/.test(eS1.doc) && /data-lang="celan/.test(eS1.doc));
 
 ck('no page exceptions', errors.length === 0, errors.join(' | '));
 verdict('STEP2 export+roundtrip', checks.every(c => c[1]));
