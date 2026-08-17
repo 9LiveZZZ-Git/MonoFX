@@ -4,7 +4,7 @@
 // <span> it builds itself, on one short phrase, and never wraps a column. This
 // one drives the actual UI (select → context menu → Translate → tongue), then
 // measures the span the editor produced, for BOTH a short multi-word phrase and
-// a long phrase that forces cols-rtl to wrap onto extra columns. It also counts
+// a long phrase that spreads cols-rtl across many columns. It also counts
 // word units against the romanization, which is where the writer and the
 // codex's own typesetter part company.
 //
@@ -49,6 +49,13 @@ const MEASURE = async (idx) => {
   if(!sp) return { err: 'no span at index ' + idx };
   await document.fonts.ready;
   const cs = getComputedStyle(sp);
+  // the codex writes only what it could translate, with punctuation stripped:
+  // transcribeScriptSVG is fed cleanText (parts with p.u filtered out) and then
+  // strips everything outside [letters, digits, ' \u2019 -] from each word
+  const rr = await window.tenebrae.translate2(sp.dataset.lang, sp.dataset.src);
+  const keptWords = ((rr && rr.toks) || []).filter(t => !t.sep && t.t && !t.u)
+    .flatMap(t => String(t.t).split(/\s+/)).filter(Boolean)
+    .map(x => x.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean).length;
   const txt = sp.firstChild;
   if(!txt || txt.nodeType !== 3) return { err: 'span child is not a text node' };
   const s = txt.nodeValue;
@@ -64,7 +71,7 @@ const MEASURE = async (idx) => {
   if(cur.length) groups.push(cur);
   const bb = sp.getBoundingClientRect();
   return { lang: sp.dataset.lang, flow: sp.dataset.flow || 'ltr', dirAttr: sp.getAttribute('dir'),
-    src: sp.dataset.src, rom: sp.dataset.rom, scr: sp.dataset.scr, textLen: s.length,
+    src: sp.dataset.src, rom: sp.dataset.rom, scr: sp.dataset.scr, textLen: s.length, keptWords,
     svgCount: sp.querySelectorAll('svg').length, imgCount: sp.querySelectorAll('img,canvas').length,
     fontFamily: cs.fontFamily, writingMode: cs.writingMode, direction: cs.direction,
     unicodeBidi: cs.unicodeBidi, textOrientation: cs.textOrientation, fontSizePx: parseFloat(cs.fontSize),
@@ -126,14 +133,19 @@ for(const r of results){
   }
   // --- column / stave order ---
   let colOrderOK = null, nCols = cols.length, wrapped = null, staveOrderOK = null,
-      groundOK = null, bottoms = null, rtlOK = null, ltrOK = null, oneStavePerRun = null;
+      groundOK = null, bottoms = null, rtlOK = null, ltrOK = null, oneStavePerRun = null,
+      ceilOK = null, tops = null;
   if(flow === 'cols-rtl'){
-    // reading order = document order; each new column must sit LEFT of the previous
+    // reading order = document order; each new column must sit RIGHT of the
+    // previous, one column per word, exactly as the codex's own gloss lays out
     const seen = [];
     for(const g of glyphs){ const x = Math.round(g.x); if(!seen.length || seen[seen.length - 1] !== x) if(!seen.includes(x)) seen.push(x); }
-    colOrderOK = seen.every((x, i) => i === 0 || x < seen[i - 1] - EPS);
+    colOrderOK = seen.every((x, i) => i === 0 || x > seen[i - 1] + EPS);
     wrapped = seen.length;
-    F.notes.push(`${r.kind}: columns(reading order) = ${JSON.stringify(seen.map(Math.round))}`);
+    // every column starts on the same ceiling, the mirror of btt-stave's ground
+    tops = [...new Set(m.groups.map(g => Math.round(g.top)))];
+    ceilOK = tops.length === 1;
+    F.notes.push(`${r.kind}: columns(reading order) = ${JSON.stringify(seen.map(Math.round))} tops=${JSON.stringify(tops)}`);
   }
   if(flow === 'btt-stave'){
     const staves = m.groups.map(g => ({ x: Math.round(g.x0), bottom: Math.round(g.bottom), n: g.n }));
@@ -165,11 +177,11 @@ for(const r of results){
   }
   // word-unit accounting: the codex typesets one unit per whitespace-separated
   // romanized word; the writer emits one run per compiler TOKEN
-  const romWords = String(m.rom || '').trim().split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
+  const romWords = m.keptWords;
   const scrRuns = String(m.scr || '').split(/[\n ]+/).filter(Boolean).length;
 
   Object.assign(F, { [r.kind]: { nCols, rows: rows.length, maxGap, axisOK, axisBad, colOrderOK, wrapped,
-    staveOrderOK, groundOK, bottoms, rtlOK, ltrOK, oneStavePerRun, romWords, scrRuns, wordGaps, lineInfo,
+    staveOrderOK, groundOK, bottoms, ceilOK, tops, rtlOK, ltrOK, oneStavePerRun, romWords, scrRuns, wordGaps, lineInfo,
     box: m.box, textLen: m.textLen, svg: m.svgCount, img: m.imgCount, fontPx: m.fontSizePx } });
 
   console.log(`${tag.padEnd(24)} flow=${flow.padEnd(10)} glyphs=${String(glyphs.length).padEnd(4)} cols=${String(nCols).padEnd(3)} railGap=${maxGap === -Infinity ? 'n/a' : maxGap.toFixed(2)}px wordGap=${wordGaps.length ? [...new Set(wordGaps)].join('/') : 'n/a'} box=${m.box.w.toFixed(0)}x${m.box.h.toFixed(0)} romWords=${romWords} scrRuns=${scrRuns} svg=${m.svgCount} fontPx=${m.fontSizePx}`);
@@ -184,12 +196,15 @@ const byFlow = f => Object.entries(perLang).filter(([, F]) => F.flow === f);
 console.log('');
 // cols-rtl
 for(const [id, F] of byFlow('cols-rtl')){
-  ck(`${id} cols-rtl: writing-mode vertical-rl + upright`, F.css.writingMode === 'vertical-rl' && F.css.textOrientation === 'upright', `${F.css.writingMode}/${F.css.textOrientation}`);
+  ck(`${id} cols-rtl: writing-mode vertical-lr + upright + ltr inline axis`, F.css.writingMode === 'vertical-lr' && F.css.textOrientation === 'upright' && F.css.direction === 'ltr', `${F.css.writingMode}/${F.css.textOrientation}/${F.css.direction}`);
   ck(`${id} cols-rtl: letters run DOWN the column (short + long)`, F.short.axisOK && F.long.axisOK, JSON.stringify([F.short.axisBad, F.long.axisBad]));
-  ck(`${id} cols-rtl: columns advance RIGHT->LEFT (short + long)`, F.short.colOrderOK && F.long.colOrderOK);
-  ck(`${id} cols-rtl: long phrase actually WRAPS to extra columns`, F.long.wrapped > 1, `columns=${F.long.wrapped} (short=${F.short.wrapped})`);
+  ck(`${id} cols-rtl: columns advance LEFT->RIGHT (short + long)`, F.short.colOrderOK && F.long.colOrderOK);
+  ck(`${id} cols-rtl: a column per word — long phrase spreads wider than short`, F.long.wrapped > F.short.wrapped && F.short.wrapped > 1, `columns long=${F.long.wrapped} short=${F.short.wrapped}`);
   ck(`${id} cols-rtl: rail fuses, zero gap between stacked letters of a word`, F.short.maxGap <= 0.5 && F.long.maxGap <= 0.5, `railGap short=${F.short.maxGap.toFixed(2)} long=${F.long.maxGap.toFixed(2)}`);
-  ck(`${id} cols-rtl: words inside a column are separated by a real gap`, F.short.wordGaps.length > 0 && F.short.wordGaps.every(g => g > 1), `wordGaps=${JSON.stringify([...new Set(F.short.wordGaps)])}`);
+  // one word per column means no two words ever share a column: the word-gap
+  // measurement (letter, separator, letter at the same x) must find nothing
+  ck(`${id} cols-rtl: no two words share a column`, F.short.wordGaps.length === 0 && F.long.wordGaps.length === 0, `intra-column word gaps short=${F.short.wordGaps.length} long=${F.long.wordGaps.length}`);
+  ck(`${id} cols-rtl: columns hang from a common ceiling`, F.short.ceilOK && F.long.ceilOK, `tops short=${JSON.stringify(F.short.tops)} long=${JSON.stringify(F.long.tops)}`);
 }
 // btt-stave
 for(const [id, F] of byFlow('btt-stave')){
@@ -213,9 +228,10 @@ for(const [id, F] of byFlow('ltr')){
 // universal
 ck('no <svg>/<img>/<canvas> inside any span — script is TEXT', results.every(r => r.m.err || (r.m.svgCount === 0 && r.m.imgCount === 0)));
 ck('every span renders in its forged family', Object.values(perLang).every(F => /Tenebrae Omni/.test(F.css.family)));
-// word-unit accounting — one script run per romanized word
+// word-unit accounting — one script run per romanized word the codex would
+// actually write (untranslated words are not transliterated)
 const unitBad = Object.entries(perLang).filter(([, F]) => F.short.romWords !== F.short.scrRuns || F.long.romWords !== F.long.scrRuns);
-ck('one script word-unit per romanized word (codex typesets on whitespace)', unitBad.length === 0,
+ck('one script word-unit per WRITABLE romanized word (codex typesets on whitespace)', unitBad.length === 0,
    unitBad.map(([id, F]) => `${id}: short ${F.short.romWords}rom/${F.short.scrRuns}run, long ${F.long.romWords}rom/${F.long.scrRuns}run`).join(' | '));
 
 // name the offending tokens: which romanized words got fused into one unit

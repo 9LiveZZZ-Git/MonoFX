@@ -1,12 +1,12 @@
 // X2-14: translations render in the ACTUAL CONSTRUCTED SCRIPT — never
 // romanization dressed in a Latin font.
-//   Sample codex: every tongue maps to PUA codepoints rendered by the four
-//   embedded script TTFs. PUA has no Latin fallback, so glyph presence is
-//   provable: text is PUA, the tongue's font is loaded and supplies those
-//   codepoints, and a canvas pixel test shows distinct real glyphs (a missing
-//   font would draw identical tofu boxes).
-//   Imported codex: spans render the codex's SVG glyph systems, including
-//   vertical flows (cols-rtl staves, btt-stave notches).
+//   At boot the engine is the EMBEDDED Codex Omnilingua, so every scripted
+//   tongue maps to PUA codepoints served by a forged TTF. PUA has no Latin
+//   fallback, so glyph presence is provable: text is PUA, the tongue's font is
+//   loaded and supplies those codepoints, and a canvas pixel test shows
+//   distinct real glyphs (a missing font would draw identical tofu boxes).
+//   Imported codex: importing a codex on top re-renders every span, vertical
+//   flows included (cols-rtl columns, btt-stave staves).
 // Run: cd probes && node s2-glyph-script.mjs
 import { launch, wait, createBook, insertTranslationSpan, verdict } from './ex-lib.mjs';
 
@@ -17,16 +17,23 @@ const ck = (label, ok, extra) => { checks.push([label, ok]); console.log((ok ? '
 const PUA = c => c.charCodeAt(0) >= 0xE000 && c.charCodeAt(0) <= 0xF8FF;
 const puaShare = s => { const letters = [...String(s)].filter(c => /\S/.test(c)); return letters.length ? letters.filter(PUA).length / letters.length : 0; };
 
-// ---- sample codex: every tongue renders PUA script, not Latin ----
-const sample = await page.evaluate(() => {
-  const c = window.tenebrae.codex();
-  return c.languages.map(l => {
-    const r = window.tenebrae.translate(l.id, 'the sea remembers the old king');
-    return { id: l.id, family: l.fontFamily, rom: r.romanization, rendered: r.rendered, dir: l.dir };
-  });
+// ---- boot engine: every scripted tongue renders forged PUA script, not Latin ----
+await wait(page, 3000);
+const sample = await page.evaluate(async () => {
+  const w = await window.tenebrae.engine();
+  const F = window.tenebrae._forge;
+  const out = [];
+  for(const id of Object.keys(w.CODEX.TRANS)){
+    const r = await window.tenebrae.translate2(id, 'the sea remembers the old king');
+    const f = F.map() && F.map()[id];
+    if(!r || !f) continue;
+    out.push({ id, family: f.family, rom: r.romanization, rendered: F.textForToks(id, r.toks) || '', dir: r.dir });
+  }
+  return out;
 });
-console.log('sample tongues:', JSON.stringify(sample.map(t => ({ id: t.id, family: t.family, rom: t.rom, renderedLen: t.rendered.length })), null, 1).slice(0, 800));
-ck('all 7 sample tongues produce a rendered script form', sample.length === 7 && sample.every(t => t.rendered && t.rendered.length > 0));
+console.log('scripted tongues:', JSON.stringify(sample.map(t => ({ id: t.id, family: t.family, rom: t.rom, renderedLen: t.rendered.length })), null, 1).slice(0, 800));
+ck('every scripted tongue produces a rendered script form', sample.length >= 5 && sample.every(t => t.rendered && t.rendered.length > 0),
+   JSON.stringify(sample.map(t => t.id)));
 ck('rendered form is PUA script (>=90% of letters), never the romanization', sample.every(t => puaShare(t.rendered) >= 0.9 && t.rendered !== t.rom),
    sample.map(t => `${t.id}:${Math.round(puaShare(t.rendered) * 100)}%`).join(' '));
 
@@ -47,8 +54,8 @@ const glyphPixels = await page.evaluate(() => {
     g.fillText(ch, 4, 32);
     return cv.toDataURL();
   };
-  const fam = 'Tenebrae Celan Runes';
-  const a = String.fromCharCode(0xE100), b = String.fromCharCode(0xE101);
+  const fam = 'Tenebrae Omni Celan High';
+  const a = String.fromCharCode(0xE500), b = String.fromCharCode(0xE501);
   return {
     twoGlyphsDiffer: draw(a, fam) !== draw(b, fam),          // tofu would be identical
     glyphNotLatin: draw(a, fam) !== draw('a', 'Georgia'),    // not Latin reuse
@@ -74,7 +81,7 @@ const uiSpans = await page.evaluate(() => [...document.querySelectorAll('#ed-con
 })));
 console.log('editor spans:', JSON.stringify(uiSpans, null, 1));
 ck('editor spans render PUA script text', uiSpans.length === 2 && uiSpans.every(sp => [...sp.text].some(c => c.charCodeAt(0) >= 0xE000)));
-ck('editor spans use their script fonts', uiSpans.some(sp => /Celan Runes/.test(sp.family)) && uiSpans.some(sp => /Fallen Script/.test(sp.family)));
+ck('editor spans use their script fonts', uiSpans.every(sp => /Tenebrae Omni|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(uiSpans.map(sp => sp.family)));
 ck('Kerrackian span is RTL', uiSpans.find(sp => sp.lang === 'kerrackian').dir === 'rtl');
 
 // ---- imported codex: SVG glyph systems incl. vertical flows ----
@@ -114,8 +121,8 @@ console.log('omni spans:', JSON.stringify(omniSpans, null, 1));
 ck('imported-codex spans are TEXT — zero SVG', omniSpans.length >= 2 && omniSpans.every(sp => sp.svg === 0));
 ck('spans carry forged-font PUA script text', omniSpans.every(sp => sp.scrPUA > 0 && sp.textIsScr));
 ck('spans use the forged fonts', omniSpans.every(sp => /Tenebrae Omni|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(omniSpans.map(sp => sp.family)));
-ck('vertical flows via writing-mode (cols-rtl -> vertical-rl, btt-stave -> vertical-lr)',
-   omniSpans.some(sp => sp.flow === 'cols-rtl' && sp.wm === 'vertical-rl') || omniSpans.some(sp => sp.flow === 'btt-stave' && sp.wm === 'vertical-lr'),
+ck('vertical flows via writing-mode (both cols-rtl and btt-stave -> vertical-lr)',
+   omniSpans.some(sp => sp.flow === 'cols-rtl' && sp.wm === 'vertical-lr') && omniSpans.some(sp => sp.flow === 'btt-stave' && sp.wm === 'vertical-lr'),
    JSON.stringify(omniSpans.map(sp => `${sp.lang}:${sp.flow}:${sp.wm}`)));
 const forgedFonts = await page.evaluate(() => [...document.fonts].filter(f => /Tenebrae Omni/.test(f.family)).map(f => `${f.family}:${f.status}`));
 ck('forged fonts registered and loaded', forgedFonts.length >= 5 && forgedFonts.every(f => /loaded/.test(f)), JSON.stringify(forgedFonts));

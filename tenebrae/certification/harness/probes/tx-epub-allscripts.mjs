@@ -170,7 +170,7 @@ ck('TX-10 per-language CSS points every span at an embedded family', langCSSOK,
 
 const flowsUsed = [...new Set(epubSpans.map(s => s.flow).filter(Boolean))];
 ck('TX-10 per-flow CSS present for every flow used', flowsUsed.every(f => css.includes(`.tspan[data-flow="${f}"]{`)), flowsUsed.join(','));
-ck('TX-10 cols-rtl rule is vertical-rl', /\.tspan\[data-flow="cols-rtl"\]\{[^}]*writing-mode:vertical-rl/.test(css));
+ck('TX-10 cols-rtl rule is vertical-lr (columns advance left->right, letters down)', /\.tspan\[data-flow="cols-rtl"\]\{[^}]*writing-mode:vertical-lr/.test(css));
 ck('TX-10 btt-stave rule is vertical-lr + direction:rtl + pre-wrap', /\.tspan\[data-flow="btt-stave"\]\{[^}]*writing-mode:vertical-lr[^}]*direction:rtl[^}]*white-space:pre-wrap/.test(css));
 ck('TX-10 rtl rule is direction:rtl + isolate-override', /\.tspan\[data-flow="rtl"\]\{direction:rtl;unicode-bidi:isolate-override\}/.test(css));
 

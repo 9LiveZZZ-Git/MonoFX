@@ -107,7 +107,7 @@ const readSpan = () => page.evaluate(async () => {
            pua: [...txt].filter(c => /\S/.test(c)).every(c => c.charCodeAt(0) >= 0xE000 && c.charCodeAt(0) <= 0xF8FF) };
 });
 const vertical = await readSpan();
-ck('setup: vertical Celan High span in place', vertical.flow === 'cols-rtl' && vertical.writingMode === 'vertical-rl' && vertical.dir === 'rtl',
+ck('setup: vertical Celan High span in place', vertical.flow === 'cols-rtl' && vertical.writingMode === 'vertical-lr' && vertical.dir !== 'rtl',
    JSON.stringify(vertical));
 
 await tapSpan(); await sheetItem('Change tongue'); await sheetItem('Celan Basic');
@@ -158,7 +158,7 @@ const sheetAfterReload = await page.evaluate(() => {
 console.log('sheet after reload:', JSON.stringify(sheetAfterReload));
 ck('reload: the rehydrated span still opens a complete sheet',
    sheetAfterReload.title === 'Celan Basic' && sheetAfterReload.big && sheetAfterReload.src === '“the old king”' &&
-   sheetAfterReload.rom === cbTruth && sheetAfterReload.gloss === 3 && sheetAfterReload.items.length === 5,
+   sheetAfterReload.rom === cbTruth && sheetAfterReload.gloss === 3 && sheetAfterReload.items.length === 7,
    JSON.stringify(sheetAfterReload));
 
 await sheetItem('Change tongue'); await sheetItem('Kerrackian');

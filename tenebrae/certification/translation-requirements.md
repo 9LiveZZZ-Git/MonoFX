@@ -37,10 +37,20 @@ demonstrated against the running app.
   glyph keys the codex's own tokenizer produces for that word, including the unknown-token
   mark.
 - **TX-6** (F) **Canonical layout, per the codex's own typesetter.** DOM geometry proves:
-  `cols-rtl` letters run down a column and columns advance right→left; `btt-stave` gives
-  one stave per word, staves left→right, letters bottom-up, all staves standing on common
+  `cols-rtl` gives one column per word, letters running down the column in logical order,
+  columns advancing left→right, all hanging from a common ceiling; `btt-stave` gives one
+  stave per word, staves left→right, letters bottom-up, all staves standing on common
   ground; `rtl` runs letters and words right→left. Stacked letters abut with zero gap so
-  stems fuse into a continuous rail. Holds for multi-word phrases and column wrapping.
+  stems fuse into a continuous rail. Holds for multi-word phrases and long words.
+  `dir="rtl"` belongs to the horizontal `rtl` tongue **alone** — inside a vertical writing
+  mode `direction` reverses the *inline* (vertical) axis and stands the column on its head.
+  The codex reverses its token order for `rtl` and `btt-stave` and **not** for `cols-rtl`.
+- **TX-6b** (F) **Only what the codex would write.** The codex feeds its typesetter
+  `cleanText` — the compiled lines with untranslated parts (`p.u`) removed — and strips
+  everything outside `[letters, digits, ' ’ -]` from each word before matching. The writer
+  does the same: a word the lexicon could not render is **not** transliterated letter by
+  letter into the script, and sentence punctuation is not written as a glyph. The full
+  romanization (unknown words included) still lives in `data-rom` and the tap sheet.
 
 ### The author's loop
 - **TX-7** (F) **Highlight → translate.** Selection to translated span works through the

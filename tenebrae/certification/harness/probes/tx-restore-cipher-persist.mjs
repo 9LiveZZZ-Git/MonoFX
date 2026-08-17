@@ -93,8 +93,10 @@ const engine = await page.evaluate(async () => {
   return { name: c.name, sample: !!c.sample, rom: r && r.romanization };
 });
 console.log('engine after restore:', JSON.stringify(engine));
-ck('the restore left the sample cipher as the live engine (the defect under test)',
-   engine.sample === true, JSON.stringify(engine));
+// this probe was written to DEMONSTRATE the defect (restore leaving the sample
+// cipher live); TX-1 now forbids it, so the assertion reads the fixed direction
+ck('the restore leaves the codex as the live engine, never the sample cipher',
+   engine.sample === false, JSON.stringify(engine));
 ck('the existing span still carries the codex romanization', after.sp && after.sp.rom === trueRom,
    `rom=${JSON.stringify(after.sp && after.sp.rom)} want ${JSON.stringify(trueRom)}`);
 ck('the existing span is still marked as a codex span (data-omni)', !!(after.sp && after.sp.omni),

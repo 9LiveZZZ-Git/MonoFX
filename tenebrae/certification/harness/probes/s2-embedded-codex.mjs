@@ -62,7 +62,7 @@ let span = await page.evaluate(() => {
 });
 console.log('editor span:', JSON.stringify(span));
 ck('span is Celan High in forged Seal-Hand PUA text', !!span && span.lang === 'celan_high' && span.pua > 0 && /Tenebrae Omni Celan High/.test(span.family));
-ck('span lays out as canonical vertical columns', !!span && span.flow === 'cols-rtl' && span.wm === 'vertical-rl' && span.tallerThanWide);
+ck('span lays out as canonical vertical columns', !!span && span.flow === 'cols-rtl' && span.wm === 'vertical-lr' && span.tallerThanWide);
 ck('no page exceptions', errors.length === 0, errors.join(' | ').slice(0, 200));
 verdict('EMBEDDED CODEX', checks.every(c => c[1]));
 await browser.close();

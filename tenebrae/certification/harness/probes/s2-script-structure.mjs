@@ -5,7 +5,8 @@
 //                          matchWord glyph keys, in the codex's canonical
 //                          visual order (rtl / btt-stave reversal included)
 //   3. spatial layout    — DOM geometry proves the declared flow:
-//                          cols-rtl  columns advance right->left, letters down
+//                          cols-rtl  one column per word, columns advance
+//                                    left->right, letters down, common ceiling
 //                          btt-stave staves advance left->right, common ground,
 //                                    first letter at the BOTTOM
 //                          rtl       first word rightmost
@@ -55,7 +56,11 @@ const res = await page.evaluate(async phrases => {
           const i = c.charCodeAt(0) - f.base;
           return (i >= 0 && i < sc.glyphs.length) ? sc.glyphs[i].k.toLowerCase() : (i === sc.glyphs.length ? '·' : '?');
         }));
-      const codexWords = (r.toks || []).filter(t => !t.sep && t.t).map(t => {
+      // the codex feeds its typesetter cleanText — translatable parts only —
+      // and strips everything outside [letters, digits, ' \u2019 -] per word
+      const codexWords = (r.toks || []).filter(t => !t.sep && t.t && !t.u)
+        .flatMap(t => String(t.t).split(/\s+/).filter(Boolean))
+        .map(x => x.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean).map(t => {
         let keys = C.makeMatcher(sc) && [];
         keys = (function(word){
           const o = []; let i = 0; const s2 = String(word).toLowerCase();
@@ -65,7 +70,7 @@ const res = await page.evaluate(async phrases => {
             if(hit){ o.push(hit); i += hit.length; } else { o.push(/\S/.test(s2[i]) ? '·' : ''); i++; }
           }
           return o.filter(Boolean);
-        })(t.t);
+        })(t);
         return keys;
       });
       const expect = codexWords.map(k => k.slice()); // logical order in the text
@@ -120,8 +125,13 @@ const res = await page.evaluate(async phrases => {
     if(flow === 'cols-rtl'){
       const cols = [...new Set(glyphs.map(g => Math.round(g.x)))].sort((a, b) => a - b);
       const firstX = Math.round(glyphs[0].x);
-      ck('columns advance right->left (first word rightmost)', cols.length === 1 || firstX === cols[cols.length - 1],
+      ck('columns advance left->right (first word leftmost)', cols.length === 1 || firstX === cols[0],
          `first=${firstX} cols=${JSON.stringify(cols)}`);
+      const colXs = groups.map(g => Math.round(g[0].x));
+      ck('one column per word, each further right', colXs.every((x, i) => i === 0 || x > colXs[i-1]),
+         JSON.stringify(colXs));
+      const tops = [...new Set(groups.map(g => Math.round(Math.min(...g.map(r2 => r2.y)))))];
+      ck('columns hang from a common ceiling', tops.length === 1, `tops=${JSON.stringify(tops)}`);
     }
     if(flow === 'btt-stave'){
       const staves = groups.map(g => ({ x: Math.round(g[0].x), bottom: Math.max(...g.map(r2 => r2.y + r2.h)) }));

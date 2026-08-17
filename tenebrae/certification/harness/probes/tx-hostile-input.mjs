@@ -487,7 +487,7 @@ await createBook(page, 'Hostile Book');
   await selectSpanning(page, LONGWORD.slice(0, 20), LONGWORD.slice(-20));
   const selText = await page.evaluate(() => getSelection().toString());
   note('G selection length', selText.length);
-  const r = await ctxTranslate('Celan High'); // cols-rtl, max-height:13em
+  const r = await ctxTranslate('Celan High'); // cols-rtl, one column per word
   ck('G: over-long-word translate completed', r.opened && r.tongue, JSON.stringify(r));
   const geo = await page.evaluate(() => {
     const sp = document.querySelector('#ed-content .tspan');
@@ -502,7 +502,7 @@ await createBook(page, 'Hostile Book');
     const ed = document.querySelector('#ed-content');
     const bb = sp.getBoundingClientRect(), eb = ed.getBoundingClientRect();
     return { chars: txt.length, glyphs: rects.length, cols: cols.length,
-      firstIsRightmost: rects.length ? Math.round(rects[0].x) === cols[cols.length - 1] : false,
+      firstIsLeftmost: rects.length ? Math.round(rects[0].x) === cols[0] : false,
       spanW: Math.round(bb.width), spanH: Math.round(bb.height), edW: Math.round(eb.width),
       overflowsEditorBox: bb.width > eb.width + 1,
       hScroll: ed.scrollWidth > ed.clientWidth + 2,
@@ -512,7 +512,7 @@ await createBook(page, 'Hostile Book');
   });
   note('G geometry', geo);
   ck('G: the over-long word wraps into multiple columns', !!geo && geo.cols > 1, JSON.stringify(geo));
-  ck('G: columns still advance right→left (first glyph rightmost)', !!geo && geo.firstIsRightmost, JSON.stringify(geo));
+  ck('G: columns still advance left→right (first glyph leftmost)', !!geo && geo.firstIsLeftmost, JSON.stringify(geo));
   ck('G: span stays inside the editor box (no horizontal blow-out)',
      !!geo && !geo.overflowsEditorBox && !geo.hScroll && !geo.pageHScroll, JSON.stringify(geo));
   const d = (await spanDump(page))[0];

@@ -111,7 +111,7 @@ ck('omni: canvas draws distinct real glyphs in the sheet, not tofu', !!s2 && s2.
 const vertIdx = spanMeta.find(s => s.flow === 'cols-rtl').i;
 const s3 = await inspectSheet(vertIdx);
 console.log('omni sheet render (vertical):', JSON.stringify(s3));
-ck('omni vertical: sheet big render keeps data-flow + writing-mode', !!s3 && s3.dataFlow === 'cols-rtl' && s3.writingMode === 'vertical-rl',
+ck('omni vertical: sheet big render keeps data-flow + writing-mode', !!s3 && s3.dataFlow === 'cols-rtl' && s3.writingMode === 'vertical-lr',
    s3 && `${s3.dataFlow} ${s3.writingMode}`);
 ck('omni vertical: sheet big render is text, no svg', !!s3 && s3.svg === 0 && s3.puaShare >= 0.9);
 // NOTE: document.fonts.check() is coverage-insensitive for loaded faces — the

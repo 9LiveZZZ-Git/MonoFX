@@ -46,15 +46,20 @@ const codexTruth = (langId, src) => page.evaluate(async ({ id, text }) => {
   const rom = lines.map(l => l.map(p => p.t).join(' ')).join(' ');
   // the codex's own tokenizer, per romanized word -> glyph keys
   const matcher = C.makeMatcher(sc);
+  // the codex draws cleanText: translatable parts only (p.u dropped), each word
+  // stripped of everything outside [letters, digits, ' \u2019 -] before matching
   const keys = [];
   for(const l of lines) for(const p of l){
-    const s = String(p.t).toLowerCase(); const o = []; let i = 0;
+    if(p.u) continue;
+    for(const word of String(p.t).split(/\s+/).filter(Boolean)){
+    const s = String(word).toLowerCase().replace(/[^\p{L}\p{N}'\u2019-]/gu, ''); const o = []; let i = 0;
     while(i < s.length){
       let hit = null;
       for(const k of matcher.keys) if(s.startsWith(k, i)){ hit = k; break; }
       if(hit){ o.push(hit); i += hit.length; } else { if(/\S/.test(s[i])) o.push('·'); i++; }
     }
     if(o.length) keys.push(o);
+    }
   }
   return { rom, flow: C.scriptDir(sc), keys };
 }, { id: langId, text: src });

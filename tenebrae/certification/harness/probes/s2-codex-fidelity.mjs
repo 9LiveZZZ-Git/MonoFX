@@ -110,7 +110,9 @@ ck('celan rune SVGs render', SVG_WORDS.every(wd => typeof ref.svg.celan_basic[wd
 // script), not as installed font files — document.fonts is empty by design.
 // "Correct fonts" therefore means glyph-SVG parity, asserted below.
 ck('codex font model understood: SVG glyph scripts (document.fonts empty by design)', ref.fonts.length === 0 || ref.fonts.length > 0, 'fonts: [' + ref.fonts.join(', ') + ']');
-const rtl = tongues.filter(id => ref.langs[id].dir && ref.langs[id].dir !== 'ltr');
+// bidi dir="rtl" belongs to the HORIZONTAL rtl tongue only: on a vertical
+// flow `direction` reverses the inline (vertical) axis and stands it on its head
+const rtl = tongues.filter(id => ref.langs[id].dir === 'rtl');
 ck('an RTL-flow tongue exists (Kerrackian expectation)', rtl.length >= 1, JSON.stringify(rtl.map(id => id + ':' + ref.langs[id].dir)));
 
 // determinism of the reference itself

@@ -2,7 +2,8 @@
 // (what the canonical probe checks) doesn't prove layout. Under the imported
 // codex this probe measures real client rects:
 //   - vertical spans must be TALLER than wide, glyphs stacking top-to-bottom
-//   - cols-rtl columns must advance LEFTWARD, btt-stave staves RIGHTWARD
+//   - cols-rtl columns and btt-stave staves both advance RIGHTWARD, one
+//     column/stave per word (the codex's own gloss order)
 //   - words must map to columns: TWO words must produce TWO columns.
 // FINDING baked into this probe's expectations: omniScriptText (step1.html
 // ~2716-2740) groups script "words" by tk.sep tokens, and omniTranslate emits
@@ -116,6 +117,8 @@ const geo = await page.evaluate(() => [...document.querySelectorAll('#ed-content
   const scr = sp.dataset.scr || '';
   const tn = [...sp.childNodes].find(n => n.nodeType === 3);
   const bands = [];
+  const flowNow = sp.dataset.flow || 'ltr';
+  const upward = flowNow === 'btt-stave';   // btt-stave letters climb; cols-rtl descends
   let stackedOK = true;
   if(tn){
     let last = null;
@@ -129,7 +132,7 @@ const geo = await page.evaluate(() => [...document.querySelectorAll('#ed-content
       const cx = b.x + b.width / 2;
       const band = bands.find(bd => Math.abs(bd.x - cx) < b.width * 0.6);
       if(band){
-        if(last && Math.abs(last.x - cx) < b.width * 0.6 && b.top < last.top - 2) stackedOK = false;
+        if(last && Math.abs(last.x - cx) < b.width * 0.6 && (upward ? b.top > last.top + 2 : b.top < last.top - 2)) stackedOK = false;
         band.n++;
       } else bands.push({ x: cx, n: 1 });
       last = { x: cx, top: b.top };
@@ -151,16 +154,19 @@ const bw = find('btt-stave', TWO_WORDS), bs = find('btt-stave', TWO_SENTS);
 ck('all four vertical spans exist as svg-free TEXT', [cw, cs, bw, bs].every(g => g && g.svg === 0));
 ck('vertical spans are TALLER than wide', [cw, cs, bw, bs].every(g => g && g.height > g.width),
    JSON.stringify([cw, cs, bw, bs].map(g => g && `${Math.round(g.width)}x${Math.round(g.height)}`)));
-ck('glyphs stack top-to-bottom within columns', [cw, cs, bw, bs].every(g => g && g.stackedOK));
-ck('writing modes: cols-rtl=vertical-rl, btt-stave=vertical-lr, pre-line',
-   cw && cw.wm === 'vertical-rl' && bw && bw.wm === 'vertical-lr' && [cw, cs, bw, bs].every(g => /pre-line/.test(g.ws)));
+ck('letters stack along each flow\u2019s own axis (cols-rtl down, btt-stave up)', [cw, cs, bw, bs].every(g => g && g.stackedOK));
+ck('writing modes: both vertical flows are vertical-lr, pre-wrap',
+   cw && cw.wm === 'vertical-lr' && bw && bw.wm === 'vertical-lr' && [cw, cs, bw, bs].every(g => /pre-wrap|pre-line/.test(g.ws)),
+   JSON.stringify([cw, cs, bw, bs].map(g => g && `${g.wm}/${g.ws}`)));
 
 // -- the column mechanism works at SENTENCE granularity --
-ck('two SENTENCES produce two columns (mechanism: data-scr newline + pre-line)',
-   cs && cs.newlines === 1 && cs.columns === 2 && bs && bs.newlines === 1 && bs.columns === 2,
+// one column/stave per word: the two-sentence source has more words than the
+// two-word source, so it must produce strictly more columns
+ck('every word gets its own column/stave (newline-separated)',
+   [cs, bs].every(g => g && g.columns === g.newlines + 1) && cs.columns > cw.columns && bs.columns > bw.columns,
    `cols-rtl ${cs && cs.columns}c/${cs && cs.newlines}nl, btt ${bs && bs.columns}c/${bs && bs.newlines}nl`);
-ck('cols-rtl columns advance LEFTWARD', cs && cs.columns === 2 && cs.bandXs[0] > cs.bandXs[1], cs && JSON.stringify(cs.bandXs));
-ck('btt-stave staves advance RIGHTWARD', bs && bs.columns === 2 && bs.bandXs[0] < bs.bandXs[1], bs && JSON.stringify(bs.bandXs));
+ck('cols-rtl columns advance RIGHTWARD', cs && cs.bandXs.every((x, i) => i === 0 || x > cs.bandXs[i-1]), cs && JSON.stringify(cs.bandXs));
+ck('btt-stave staves advance RIGHTWARD', bs && bs.bandXs.every((x, i) => i === 0 || x > bs.bandXs[i-1]), bs && JSON.stringify(bs.bandXs));
 
 // -- REQUIRED word-level geometry: two WORDS must produce two columns --
 ck('REQUIRED: two words -> two columns (btt-stave "stone gate")', bw && bw.columns === 2,

@@ -2433,15 +2433,15 @@ blockquote{margin:1em 2em;font-style:italic}
 .tspan{font-style:normal}
 .tspan[dir="rtl"]{unicode-bidi:isolate}
 .tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}
-.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:var(--tsrun,13em);line-height:1.12;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
-.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.6;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:var(--tsrun,22em);line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.75;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
 /* script size + full-width, author-controlled from the span sheet */
 .tspan[data-size="s"]{font-size:.9em}
 .tspan[data-size="l"]{font-size:1.6em}
 .tspan[data-size="xl"]{font-size:2.3em}
 .tspan[data-block="1"]{display:block;width:fit-content;max-width:100%;margin:.7em 0;vertical-align:baseline}
 .tspan[data-block="1"][data-flow="btt-stave"]{width:100%}
-.tspan[data-block="1"][data-flow="cols-rtl"]{--tsrun:9em}`;
+.tspan[data-block="1"][data-flow="cols-rtl"]{width:100%}`;
 function epubFontEntries(){
   // every script font the book's spans could need: the sample TTFs, fonts from
   // an imported JSON pack, and the fonts forged from an imported codex
@@ -2766,34 +2766,56 @@ function forgeOmniFonts(w){
 function omniScriptText(langId, toks){
   // The string stays in LOGICAL order (so copy, search, export and round-trip
   // all stay sane); CSS turns it into the codex's canonical visual layout:
-  //   cols-rtl  - vertical-rl: letters down a column, columns right->left
+  //   cols-rtl  - vertical-lr: one column per word, letters top->bottom in
+  //               logical order (the codex reverses toks for rtl and btt-stave
+  //               but NOT for cols-rtl), columns advancing left->right
   //   btt-stave - vertical-lr + direction:rtl: letters bottom-up, one stave per
   //               word, staves left->right, all standing on common ground
   //   rtl       - direction:rtl + bidi-override: letters and words right->left
+  // Only the horizontal rtl tongue may carry dir="rtl": inside a vertical
+  // writing mode `direction` flips the *inline* axis, which would stand a
+  // column on its head.
   const f = omniForged && omniForged[langId];
   if(!f) return null;
   const wordStr = t => {
+    // the codex strips everything outside [letters, digits, ' ’ -] from a word
+    // before matching, so a sentence-final period is not written as a glyph
     let out = '';
-    for(const m of omniMatchWord(t, f.matcher)){
+    for(const m of omniMatchWord(String(t).replace(/[^\p{L}\p{N}'’-]/gu, ''), f.matcher)){
       const k = m.g && m.g.k.toLowerCase();
       if(k && f.gidx[k] != null) out += String.fromCharCode(f.base + f.gidx[k]);
       else if(m.t) out += f.dot; // the codex draws its mark for ANY unmatched token, whitespace included
     }
     return out;
   };
-  const words = [];
-  for(const tk of toks){
-    if(tk.sep || !tk.t) continue;
-    // the codex's own transcribers split the romanization on whitespace before
-    // drawing a word, so a compiler token holding two words is two word units
-    for(const part of String(tk.t).split(/\s+/)){
-      if(!part) continue;
-      const w = wordStr(part);
-      if(w) words.push(w);
+  // The codex feeds its script wing `cleanText`, which is the compiled lines
+  // with the UNTRANSLATED parts filtered out (`p.u`) — a word the lexicon
+  // could not render simply is not written in the script. Transliterating it
+  // letter-by-letter would put English in Tenebrae clothing, which is the one
+  // thing this feature exists to avoid.
+  const build = keepUnknown => {
+    const out = [];
+    for(const tk of toks){
+      if(tk.sep || !tk.t) continue;
+      if(tk.u && !keepUnknown) continue;
+      // the codex's own transcribers split the romanization on whitespace before
+      // drawing a word, so a compiler token holding two words is two word units
+      for(const part of String(tk.t).split(/\s+/)){
+        if(!part) continue;
+        const w = wordStr(part);
+        if(w) out.push(w);
+      }
     }
-  }
+    return out;
+  };
+  // if NOTHING was translatable there is no script to show; rather than let the
+  // span fall back to Latin, mark the words with the codex's unknown glyph
+  const words = build(false).length ? build(false) : build(true);
   if(!words.length) return null;
-  return words.join(f.flow === 'btt-stave' ? '\n' : ' '); // one stave per word
+  // vertical tongues get one word per line: a line is a column (cols-rtl) or a
+  // stave (btt-stave), which is how the codex's own transcribers lay them out
+  const vertical = f.flow === 'cols-rtl' || f.flow === 'btt-stave';
+  return words.join(vertical ? '\n' : ' ');
 }
 function omniScriptCSS(){
   let style = $('#omni-style');
@@ -2812,9 +2834,9 @@ function omniScriptCSS(){
     rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
   }
   rules.push(`.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}`);
-  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:var(--tsrun,13em);line-height:1.12;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
-  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.6;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
-  rules.push(`.tspan[data-size="s"]{font-size:.9em}.tspan[data-size="l"]{font-size:1.6em}.tspan[data-size="xl"]{font-size:2.3em}.tspan[data-block="1"]{display:block;width:100%;margin:.7em 0;vertical-align:baseline}.tspan[data-block="1"][data-flow="cols-rtl"]{--tsrun:9em}`);
+  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:var(--tsrun,22em);line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.75;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-size="s"]{font-size:.9em}.tspan[data-size="l"]{font-size:1.6em}.tspan[data-size="xl"]{font-size:2.3em}.tspan[data-block="1"]{display:block;width:100%;margin:.7em 0;vertical-align:baseline}`);
   style.textContent = rules.join('\n');
 }
 
@@ -3133,7 +3155,9 @@ function omniTranslate(w, rawLangId, text){
   const flow = sc ? C.scriptDir(sc) : 'ltr';
   return { omni: true, romanization: rom, rendered: null, toks,
     gloss: (res.parts || []).map(p => ({ s: p.tok, o: p.drop ? '\u2205' : (p.out || '\u2014'), g: (p.gloss || '') + (p.tag ? ' \u00b7 ' + p.tag : ''), k: !p.unknown && !p.drop, drop: !!p.drop })),
-    dir: (flow === 'rtl' || flow === 'cols-rtl') ? 'rtl' : 'ltr', flow,
+    // only the horizontal rtl tongue is bidi-rtl; cols-rtl is a vertical flow
+    // and dir="rtl" there would reverse its inline (vertical) axis
+    dir: flow === 'rtl' ? 'rtl' : 'ltr', flow,
     vertical: (flow === 'cols-rtl' || flow === 'btt-stave'),
     lang: { id: langId, name: (T.L && T.L.name) || langId }, langName: (T.L && T.L.name) || langId, script: sc ? sc.name : '' };
 }

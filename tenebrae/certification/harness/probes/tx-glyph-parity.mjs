@@ -100,7 +100,10 @@ const bulk = await page.evaluate(async ({ phrases, hostile }) => {
     // corpus: every token of every translated phrase
     for(const p of phrases){
       const r = await window.tenebrae.translate2(id, p);
-      const toks = (r.toks || []).filter(t => !t.sep && t.t).flatMap(t => String(t.t).split(/\s+/).filter(Boolean).map(x => ({ t: x })));
+      // the codex writes only translatable words, punctuation stripped
+      const toks = (r.toks || []).filter(t => !t.sep && t.t && !t.u)
+        .flatMap(t => String(t.t).split(/\s+/).filter(Boolean))
+        .map(x => x.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean).map(x => ({ t: x }));
       for(const t of toks) checkWord(t.t, 'corpus');
       // phrase level: the writer's script string must hold exactly one word run
       // per kept token, in logical order
@@ -188,7 +191,10 @@ for(let i = 0; i < names.length; i++){
       return seq;
     };
     const r = await window.tenebrae.translate2(langId, sp.dataset.src);
-    const toks = (r.toks || []).filter(t => !t.sep && t.t).flatMap(t => String(t.t).split(/\s+/).filter(Boolean).map(x => ({ t: x })));
+      // the codex writes only translatable words, punctuation stripped
+      const toks = (r.toks || []).filter(t => !t.sep && t.t && !t.u)
+        .flatMap(t => String(t.t).split(/\s+/).filter(Boolean))
+        .map(x => x.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean).map(x => ({ t: x }));
     const domRuns = sp.textContent.split(/[\n ]+/).filter(Boolean);
     const want = toks.map(t => codexKeys(t.t));
     const got = domRuns.map(decode);

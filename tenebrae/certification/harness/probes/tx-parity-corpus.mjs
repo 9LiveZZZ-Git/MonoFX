@@ -208,14 +208,20 @@ for (const id of IDS) {
       if (JSON.stringify(got.toks) !== JSON.stringify(deriveToks(raw))) { tokBad++; if (firstDiffs.length < 12) firstDiffs.push(`TOKS ${id}#${i} ${label(CORPUS[i])}\n     codex : ${JSON.stringify(deriveToks(raw)).slice(0, 200)}\n     writer: ${JSON.stringify(got.toks).slice(0, 200)}`); }
     } else {
       // Celan Basic: the writer splits each codex word into stem + trailing
-      // punctuation. Nothing may be added or lost by that split.
+      // punctuation, and splits a part that itself holds whitespace ("na mé")
+      // into its word tokens — that is what makes the split lossless, and it is
+      // the unit the typesetter draws. So the writer may hold MORE tokens than
+      // the codex has parts; what may never change is the text they rejoin to.
       const kept = raw.parts.filter(p => p.cel && !p.drop);
       const rejoin = (got.toks || []).map(t => String(t.t) + String(t.punct || '')).join(' ');
       const codexJoin = kept.map(p => String(p.cel)).join(' ');
-      if (rejoin !== codexJoin || (got.toks || []).length !== kept.length) { celanLossy++; if (firstDiffs.length < 12) firstDiffs.push(`CELAN-TOKS #${i} ${label(CORPUS[i])}\n     codex : ${JSON.stringify(codexJoin).slice(0, 160)}\n     writer: ${JSON.stringify(rejoin).slice(0, 160)}`); }
+      const partWords = kept.reduce((n, p) => n + String(p.cel).trim().split(/\s+/).length, 0);
+      if (rejoin !== codexJoin || (got.toks || []).length !== partWords) { celanLossy++; if (firstDiffs.length < 12) firstDiffs.push(`CELAN-TOKS #${i} ${label(CORPUS[i])}\n     codex : ${JSON.stringify(codexJoin).slice(0, 160)}\n     writer: ${JSON.stringify(rejoin).slice(0, 160)}`); }
     }
     const flow = gt.meta[id].flow;
-    const expDir = (flow === 'rtl' || flow === 'cols-rtl') ? 'rtl' : 'ltr';
+    // bidi dir belongs to the HORIZONTAL rtl tongue only: on a vertical flow
+    // `direction` reverses the inline (vertical) axis and inverts the column
+    const expDir = flow === 'rtl' ? 'rtl' : 'ltr';
     if (got.flow !== flow || got.dir !== expDir || got.script !== gt.meta[id].script || got.name !== gt.meta[id].name) {
       flowBad++; if (firstDiffs.length < 12) firstDiffs.push(`META ${id}#${i}: writer ${got.name}/${got.script}/${got.flow}/${got.dir} vs codex ${gt.meta[id].name}/${gt.meta[id].script}/${flow}/${expDir}`);
     }
@@ -228,7 +234,7 @@ if (firstDiffs.length) console.log('DIFFS:\n  ' + firstDiffs.join('\n  '));
 ck(`romanization byte-identical to the codex on all ${cells} cells`, romBad === 0, `${romBad} mismatches`);
 ck(`gloss identical (per-part s/o/g/k/drop) on all ${cells} cells`, glossBad === 0, `${glossBad} mismatches`);
 ck('token stream identical to the codex lines for every scripted tongue', tokBad === 0, `${tokBad} mismatches`);
-ck('Celan Basic token split is lossless against the codex words', celanLossy === 0, `${celanLossy} mismatches`);
+ck('Celan Basic token split is lossless against the codex words (one token per codex word)', celanLossy === 0, `${celanLossy} mismatches`);
 ck('tongue metadata (name/script/flow/dir) matches the codex', flowBad === 0, `${flowBad} mismatches`);
 ck('writer never returns null/throws on a corpus cell', nullBad === 0, `${nullBad} nulls`);
 

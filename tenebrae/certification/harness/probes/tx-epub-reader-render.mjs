@@ -92,7 +92,9 @@ ck('TX-10 every parsed @font-face has a usable family name',
 const written = {
   faces: declaredFaces,
   lang: (css.match(/\.tspan\[data-lang=/g) || []).length,
-  flow: (css.match(/\.tspan\[data-flow=/g) || []).length,
+  // count RULES whose selector mentions data-flow — the compound
+  // .tspan[data-block="1"][data-flow="…"] rules are per-flow rules too
+  flow: css.split('}').filter(seg => /\[data-flow=/.test(seg.split('{')[0] || '')).length,
   base: (css.match(/^(body|h1,h2,h3,h4|blockquote|\.ast|\.sc|\.tspan)\{/gm) || []).length,
 };
 // escape ASCII apostrophes that sit INSIDE a single-quoted CSS string
@@ -180,7 +182,7 @@ ck('TX-10 every span paints differently from an unavailable-face fallback',
    rendered.spans.every(s => s.box[0] !== s.ctlBox[0] || s.box[1] !== s.ctlBox[1]),
    rendered.spans.filter(s => s.box[0] === s.ctlBox[0] && s.box[1] === s.ctlBox[1]).map(s => `${s.lang} ${s.box.join('x')}`).join(' | '));
 ck('TX-10 the per-flow CSS actually applies in the reader',
-   rendered.spans.every(s => s.flow !== 'cols-rtl' || s.writingMode === 'vertical-rl') &&
+   rendered.spans.every(s => s.flow !== 'cols-rtl' || s.writingMode === 'vertical-lr') &&
    rendered.spans.every(s => s.flow !== 'btt-stave' || (s.writingMode === 'vertical-lr' && s.direction === 'rtl')) &&
    rendered.spans.every(s => s.flow !== 'rtl' || s.direction === 'rtl'),
    rendered.spans.map(s => `${s.lang}:${s.flow || 'ltr'}/${s.writingMode}/${s.direction}`).join(' '));
@@ -212,7 +214,7 @@ for(const s of fixedRender) console.log(`   ${String(s.lang).padEnd(14)} family=
 ck('COUNTERFACTUAL: with the apostrophe escaped, every span paints in its forged family',
    fixedRender.every(s => writtenFamilies.has(s.family)), fixedRender.map(s => s.family).join(' | '));
 ck('COUNTERFACTUAL: with the apostrophe escaped, every flow applies',
-   fixedRender.every(s => s.flow !== 'cols-rtl' || s.wm === 'vertical-rl') &&
+   fixedRender.every(s => s.flow !== 'cols-rtl' || s.wm === 'vertical-lr') &&
    fixedRender.every(s => s.flow !== 'btt-stave' || (s.wm === 'vertical-lr' && s.dir === 'rtl')),
    fixedRender.map(s => `${s.lang}:${s.flow || 'ltr'}/${s.wm}`).join(' '));
 await fixedPage.screenshot({ path: `${OUT}/reader-fixed.png`, fullPage: true });

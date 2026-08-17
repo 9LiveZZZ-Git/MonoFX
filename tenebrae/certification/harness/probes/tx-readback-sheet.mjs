@@ -124,8 +124,8 @@ function geometryVerdict(flow, rects){
   if(flow === 'cols-rtl'){
     const down = groups.every(g => g.every((r, i) => i === 0 || !same(r.x, g[i-1].x) || r.y > g[i-1].y));
     const cols = [...new Set(glyphs.map(g => Math.round(g.x)))].sort((a, b) => a - b);
-    const firstRightmost = cols.length === 1 || Math.round(glyphs[0].x) === cols[cols.length - 1];
-    return { ok: down && firstRightmost, why: `down=${down} firstRightmost=${firstRightmost} cols=${JSON.stringify(cols)}` };
+    const firstLeftmost = cols.length === 1 || Math.round(glyphs[0].x) === cols[0];
+    return { ok: down && firstLeftmost, why: `down=${down} firstLeftmost=${firstLeftmost} cols=${JSON.stringify(cols)}` };
   }
   if(flow === 'btt-stave'){
     const up = groups.every(g => g.every((r, i) => i === 0 || !same(r.x, g[i-1].x) || r.y < g[i-1].y));
@@ -252,8 +252,10 @@ for(const [label, id] of CHAIN){
   ck(`${tag}: script re-rendered as text (no svg, no Latin)`, s.textIsScr && s.svg === 0 && !s.latin && s.pua >= 0.9,
      `textIsScr=${s.textIsScr} svg=${s.svg} latin=${s.latin} pua=${Math.round(s.pua*100)}%`);
   ck(`${tag}: no stale flow left over`, (s.flow || 'ltr') === truth.flow, `data-flow=${s.flow} expected ${truth.flow}`);
-  ck(`${tag}: no stale dir attribute`, (s.dirAttr === 'rtl') === (truth.flow === 'rtl' || truth.flow === 'cols-rtl'), `dir=${s.dirAttr}`);
-  const wantWM = truth.flow === 'cols-rtl' ? 'vertical-rl' : truth.flow === 'btt-stave' ? 'vertical-lr' : 'horizontal-tb';
+  // dir="rtl" belongs to the horizontal rtl tongue alone — on a vertical flow it
+  // reverses the inline (vertical) axis and turns the column upside down
+  ck(`${tag}: no stale dir attribute`, (s.dirAttr === 'rtl') === (truth.flow === 'rtl'), `dir=${s.dirAttr}`);
+  const wantWM = (truth.flow === 'cols-rtl' || truth.flow === 'btt-stave') ? 'vertical-lr' : 'horizontal-tb';
   ck(`${tag}: computed writing-mode is the codex layout`, s.writingMode === wantWM, `${s.writingMode} != ${wantWM}`);
   ck(`${tag}: font switched to this tongue's forged face`, s.family.includes(label), `${s.family}`);
   const geo = geometryVerdict(truth.flow, s.rects);
