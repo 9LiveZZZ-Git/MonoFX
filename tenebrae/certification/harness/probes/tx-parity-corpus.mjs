@@ -110,7 +110,9 @@ const RAW = `(w, ids, inputs) => {
       try{
         if(id === 'celan_basic'){
           const parts = w.translateE2C(String(text));
-          return { kind: 'celan', parts: parts.map(p => ({ tok: p.tok, cel: p.cel, drop: !!p.drop, unknown: !!p.unknown, gloss: p.gloss || '' })) };
+          // p.tag is the codex's tagnote — carry it, or the ground truth is
+          // missing the very field the gloss comparison is checking
+          return { kind: 'celan', parts: parts.map(p => ({ tok: p.tok, cel: p.cel, drop: !!p.drop, unknown: !!p.unknown, gloss: p.gloss || '', tag: p.tag || '' })) };
         }
         const T = C.TRANS[id];
         const res = C.compileText(T, String(text), 'e2l');
@@ -145,7 +147,7 @@ const deriveRom = raw => {
 const deriveGloss = raw => {
   if (raw.kind === 'error') return null;
   if (raw.kind === 'celan')
-    return raw.parts.map(p => ({ s: p.tok, o: p.drop ? '∅' : (p.cel || '—'), g: p.gloss || '', k: !p.unknown && !p.drop, drop: !!p.drop }));
+    return raw.parts.map(p => ({ s: p.tok, o: p.drop ? '∅' : (p.cel || '—'), g: (p.gloss || '') + (p.tag ? ' · ' + p.tag : ''), k: !p.unknown && !p.drop, drop: !!p.drop }));
   return raw.parts.map(p => ({ s: p.tok, o: p.drop ? '∅' : (p.out || '—'), g: (p.gloss || '') + (p.tag ? ' · ' + p.tag : ''), k: !p.unknown && !p.drop, drop: !!p.drop }));
 };
 const deriveToks = raw => { // non-celan only: lines flattened, separator between lines

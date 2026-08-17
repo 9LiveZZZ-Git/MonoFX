@@ -69,9 +69,28 @@ demonstrated against the running app.
   `@font-face` plus per-language and per-flow CSS; every XHTML part is strict-XML valid;
   re-importing restores live spans with source intact.
 - **TX-11** (F) **Other formats stay legible.** DOCX/Markdown/plain text carry romanization
-  (never raw PUA) and keep the English source recoverable.
+  (never raw PUA) and keep the English source recoverable. Markdown hides the source in a
+  `<!--tenebrae:begin …-->` marker so it round-trips into a live span. Plain text and .docx
+  cannot carry markers, so they print the English bracketed beside the romanization —
+  `exportOpts.sourceGloss`, on by default, togglable from the export sheet. The .docx
+  romanization stays its own italic run; the gloss is a separate upright run.
+- **TX-11b** (F) **Our own Markdown round-trips exactly.** A Tenebrae export stamps
+  `<!--tenebrae:doc-->` and marks each scene-title heading with `<!--tenebrae:scene-->`,
+  because `###` means both "scene title" and "in-scene H2". Re-importing one of our files
+  reproduces its chapter/scene structure exactly. Foreign Markdown carries no markers and
+  keeps the heading-level heuristic.
 
 ### Robustness
+- **TX-11c** (F) **A selection the codex cannot write produces no span.** If every word of
+  a selection is untranslatable, the codex's own wing draws nothing (`if(cleanText)`), so the
+  writer declines the span, says so, and leaves the author's characters exactly where they
+  are. It never invents a row of unknown marks and never leaves an invisible, un-tappable
+  element behind. The same rule governs changing tongue on an existing span.
+- **TX-11d** (F) **A span lands where the author put it.** `execCommand('insertHTML')` hoists
+  the span out of its block when the selection ran to the block's end, and drops the inline
+  marks the replaced text carried. The span is returned to its block and re-wrapped in the
+  bold/italic/underline run it replaced, so a translation inside a heading stays inside that
+  heading. Undo still reverses the whole operation.
 - **TX-12** (F) **Hostile input.** Long selections, selections spanning paragraphs and
   existing spans, XML/HTML metacharacters, emoji and combining marks, over-long words,
   translating while the engine wakes, rapid translate/undo cycles, and reload mid-flight

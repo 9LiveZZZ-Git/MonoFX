@@ -27,7 +27,9 @@ const spanInfo = await page.evaluate(() => {
                text: t.textContent, inP: t.parentElement.tagName } : null;
 });
 console.log('span after insert:', JSON.stringify(spanInfo));
-const rom = await page.evaluate(() => window.tenebrae.translate('celan-basic', 'sea remembers').romanization);
+// translate() is the legacy sample-cipher seam; translate2() is the real
+// resolver, which under the embedded codex is what the export actually holds
+const rom = await page.evaluate(async () => (await window.tenebrae.translate2('celan_basic', 'sea remembers')).romanization);
 const romPUA = spanInfo && PUA_RE.test(spanInfo.text);
 console.log('engine romanization:', rom, '| editor span shows PUA glyphs (expected):', romPUA);
 
@@ -47,7 +49,7 @@ console.log('--- book.txt ---\n' + txt.text + '\n---------------');
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
 const checks = [
   has('span landed in a wrapped block', !!spanInfo && spanInfo.inP === 'P'),
-  has('span stores source + lang + rom', !!spanInfo && spanInfo.src === 'sea remembers' && spanInfo.lang === 'celan-basic' && spanInfo.rom === rom),
+  has('span stores source + lang + rom', !!spanInfo && spanInfo.src === 'sea remembers' && spanInfo.lang === 'celan_basic' && spanInfo.rom === rom),
   has('md carries romanization', md.text.includes(rom)),
   has('md keeps source in marker', md.text.includes('"source":"sea remembers"')),
   has('md free of PUA glyphs', !PUA_RE.test(md.text)),
@@ -67,7 +69,7 @@ const after = await page.evaluate(() => {
   return t ? { lang: t.dataset.lang, src: t.dataset.src, rom: t.dataset.rom } : null;
 });
 console.log('span after reload:', JSON.stringify(after));
-checks.push(has('source survives reload', !!after && after.src === 'sea remembers' && after.lang === 'celan-basic' && after.rom === rom));
+checks.push(has('source survives reload', !!after && after.src === 'sea remembers' && after.lang === 'celan_basic' && after.rom === rom));
 
 // tap the span → sheet shows the source line and the romanization
 await page.click('#ed-content .tspan');
@@ -80,9 +82,9 @@ checks.push(
 );
 
 // determinism of the re-translation path across the reload
-const det = await page.evaluate(() => {
-  const a = window.tenebrae.translate('celan-basic', 'sea remembers');
-  const b = window.tenebrae.translate('celan-basic', 'sea remembers');
+const det = await page.evaluate(async () => {
+  const a = await window.tenebrae.translate2('celan_basic', 'sea remembers');
+  const b = await window.tenebrae.translate2('celan_basic', 'sea remembers');
   return a.romanization === b.romanization;
 });
 checks.push(has('repeat translate identical', det));

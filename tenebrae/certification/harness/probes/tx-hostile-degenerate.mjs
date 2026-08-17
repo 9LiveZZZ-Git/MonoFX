@@ -157,7 +157,11 @@ ck('degenerate: no page exception across all cases', errors.length === 0, errors
     return { open: !!s && s.classList.contains('show'), title: s ? (s.querySelector('.sheet-title') || {}).textContent : null };
   });
   console.log('  empty-span tap sheet:', JSON.stringify(sheetUp));
-  ck('empty-span: an emptied span can still be tapped to recover the source', tappable && sheetUp.open, JSON.stringify(sheetUp));
+  // the fix is to never create the empty span: the author's characters stay put
+  // and there is nothing to recover. If one IS created it must stay tappable.
+  ck('empty-span: nothing was created, or what was created is still tappable',
+     (!tappable && after.text.includes('...')) || (tappable && sheetUp.open),
+     `spanCreated=${tappable} sheetOpen=${sheetUp.open} text=${JSON.stringify(after.text)}`);
   await closeSheets();
 }
 

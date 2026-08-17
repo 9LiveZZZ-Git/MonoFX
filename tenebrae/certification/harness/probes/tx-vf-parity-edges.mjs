@@ -24,7 +24,7 @@ const out = await page.evaluate(async () => {
     if(!tagged.length) continue;
     const r = await window.tenebrae.translate2('celan_basic', s);
     // codex's own gloss cell = esc(p.gloss||'') + (p.tag ? tagnote(p.tag) : '')
-    const codexGloss = parts.map(p => (p.gloss || '') + (p.tag ? p.tag : ''));
+    const codexGloss = parts.map(p => (p.gloss || '') + (p.tag ? ' · ' + p.tag : ''));
     const writerGloss = (r.gloss || []).map(g => g.g);
     R.tag.push({ s, tagged: tagged.map(p => ({ tok: p.tok, cel: p.cel, gloss: p.gloss, tag: p.tag })),
                  codexGloss, writerGloss,
@@ -39,7 +39,7 @@ const out = await page.evaluate(async () => {
   for(const s of splitInputs){
     const parts = w.translateE2C(s);
     const kept = parts.filter(p => p.cel && !p.drop);
-    const codexWords = kept.map(p => p.cel);
+    const codexWords = kept.flatMap(p => String(p.cel).split(/\s+/).filter(Boolean));
     const r = await window.tenebrae.translate2('celan_basic', s);
     const writerToks = (r.toks || []).map(t => ({ t: t.t, punct: t.punct }));
     // faithful reassembly would be t + punct === the codex word

@@ -144,7 +144,10 @@ const css = txt('OEBPS/style.css');
 await writeFile(`${OUT}/style.css`, css);
 const opf = txt('OEBPS/content.opf');
 const fontEntries = ez.order.filter(o => /^OEBPS\/fonts\/f\d+\.ttf$/.test(o.name)).map(o => o.name);
-const faces = [...css.matchAll(/@font-face\{font-family:'([^']+)';src:url\('([^']+)'\)/g)].map(x => ({ family: x[1], href: x[2] }));
+// a CSS string may contain a backslash-escaped quote (Tenebrae Drover\'s Notch),
+// so the family is "anything but a bare quote", escapes included
+const faces = [...css.matchAll(/@font-face\{font-family:'((?:[^'\\]|\\.)+)';src:url\('([^']+)'\)/g)]
+  .map(x => ({ family: x[1].replace(/\\(.)/g, '$1'), href: x[2] }));
 console.log('font files:', fontEntries.length, '@font-face:', faces.length);
 ck('TX-10 css has @font-face for every embedded font file', faces.length === fontEntries.length && faces.every(f => ez.files.has('OEBPS/' + f.href)),
    faces.map(f => f.family + '->' + f.href).join(' | '));

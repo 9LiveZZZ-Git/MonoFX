@@ -28,7 +28,9 @@ console.log('editor DOM:', await page.evaluate(() => document.querySelector('#ed
 await insertTranslationSpan(page, 'ocean waits', 'Celan Basic');
 console.log('editor DOM with tspan:', await page.evaluate(() => document.querySelector('#ed-content').innerHTML));
 
-const rom = await page.evaluate(() => window.tenebrae.translate('celan-basic', 'ocean waits').romanization);
+// translate() is the legacy sample-cipher seam; the embedded codex is the
+// engine, so the export carries translate2()'s romanization
+const rom = await page.evaluate(async () => (await window.tenebrae.translate2('celan_basic', 'ocean waits')).romanization);
 console.log('expected romanization:', rom);
 
 await wait(page, 1500);

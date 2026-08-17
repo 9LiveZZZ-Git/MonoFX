@@ -28,12 +28,16 @@ await insertTranslationSpan(page, PHRASE, 'Celan Basic'); // replaces the WHOLE 
 await wait(page, 1500);
 
 // what does the app itself say the romanization is? (public seam)
-const rom = await page.evaluate(p => {
-  const r = window.tenebrae.translate('celan_basic', p);
-  return { rom: r.romanization, rendered: r.rendered };
+const rom = await page.evaluate(async p => {
+  // the embedded codex is the engine; translate() is the legacy sample seam
+  const r = await window.tenebrae.translate2('celan_basic', p);
+  // Celan Basic has no forged font of its own — it renders through the sample
+  // rune face — so read what the live span actually shows, not the forge
+  const sp = document.querySelector('#ed-content .tspan');
+  return { rom: r.romanization, rendered: (sp && (sp.dataset.scr || sp.textContent)) || '' };
 }, PHRASE);
 console.log('romanization =', JSON.stringify(rom.rom), '| rendered has PUA =', /[-]/.test(rom.rendered));
-ck('precondition: sample-codex rendered text is PUA glyphs (so the no-PUA assertion has teeth)', PUA_RE.test(rom.rendered));
+ck('precondition: the rendered script IS PUA glyphs (so the no-PUA assertion has teeth)', PUA_RE.test(rom.rendered), JSON.stringify(rom.rendered).slice(0, 60));
 
 // the stored scene doc: must be only the tspan (+ trailing nbsp), wrapped in <p>
 const stored = await page.evaluate(() => new Promise(res => {
@@ -116,7 +120,7 @@ const bdoc = Buffer.from(unzipStored(bookDocx).get('word/document.xml')).toStrin
 
 // ---- X2-5: italic romanization, never PUA — both scopes ----
 const romRun = new RegExp(`<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">${rom.rom}`);
-ck('X2-5 scene scope: tspan-only body renders as ONE italic romanization run', romRun.test(sdoc), sdoc.slice(sdoc.indexOf('Only Span'), sdoc.indexOf('Only Span') + 320));
+ck('X2-5 scene scope: the romanization is its own italic run', romRun.test(sdoc), sdoc.slice(sdoc.indexOf('Only Span'), sdoc.indexOf('Only Span') + 320));
 ck('X2-5 scene scope: zero PUA anywhere in document.xml', !PUA_RE.test(sdoc));
 ck('X2-5 book scope: italic romanization run present', romRun.test(bdoc));
 ck('X2-5 book scope: zero PUA anywhere in document.xml', !PUA_RE.test(bdoc));
@@ -160,6 +164,7 @@ console.log('re-imported:', JSON.stringify(rb));
 const s0 = rb.chapters[0] && rb.chapters[0].scenes[0];
 ck('X2-4 round-trip: structure back (book/chapter/scene titles)', rb.title === 'Tspan Only Book' && rb.chapters[0].title === 'Chapter 1' && !!s0 && s0.title === 'Only Span');
 ck('X2-4/X2-5 round-trip: romanization comes back as italic prose, no PUA', !!s0 && s0.doc.includes(`<i>${rom.rom}</i>`) && !PUA_RE.test(s0.doc), s0 && s0.doc);
+ck('X2-5 the English source rides along in the .docx (exportOpts.sourceGloss)', sdoc.includes(PHRASE) && bdoc.includes(PHRASE));
 
 ck('no page exceptions', errors.length === 0, errors.join(' | '));
 verdict('S2-DOCX-TSPAN-ONLY', checks.every(c => c[1]));

@@ -330,9 +330,9 @@ async function freshScene(bodyText){
 {
   const e0 = errMark();
   await focusEditorEnd();
-  await page.keyboard.insertText(' closing line');
+  await page.keyboard.insertText(' the old king');
   await wait(500);
-  await selectWord('closing line');
+  await selectWord('the old king');
   await openCtxTranslate();
   const stillWorks = await page.locator('#ctx .ctx-i', { hasText: 'Translate' }).count();
   await page.locator('#ctx .ctx-i', { hasText: 'Translate' }).click();
@@ -342,7 +342,7 @@ async function freshScene(bodyText){
   const final = await spanDump();
   note('K final spans', final.map(s => ({ lang: s.lang, src: s.src, pua: s.pua, latin: s.latin })));
   ck('K: after every hostile case the translate loop still works end to end',
-     stillWorks === 1 && final.some(s => s.lang === 'evernessian' && s.src === 'closing line' && s.latin === 0),
+     stillWorks === 1 && final.some(s => s.lang === 'evernessian' && s.src === 'the old king' && s.latin === 0),
      JSON.stringify(final.map(s => [s.lang, s.src])));
   noNewErrors(e0, 'K(final usability)');
 }

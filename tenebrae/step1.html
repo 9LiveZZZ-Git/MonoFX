@@ -970,7 +970,10 @@ function kvSet(key, val){
 /* ================= state ================= */
 let state = { version: 1, books: [] };
 
-const defaultExportOpts = () => ({ chapterTitles: true, sceneTitles: false, asterism: true });
+// sourceGloss: plain text and .docx cannot carry the script, so by default they
+// print the English beside the romanization — otherwise a translated passage
+// leaves those formats with no way back to what the author wrote
+const defaultExportOpts = () => ({ chapterTitles: true, sceneTitles: false, asterism: true, sourceGloss: true });
 
 function newBook(title){
   return {
@@ -1040,8 +1043,10 @@ function sanitizeHTML(html){
           t.className = 'tspan';
           t.dataset.lang = String(child.dataset.lang).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
           t.dataset.src = String(child.dataset.src).slice(0, 200000); // never lose the author's English
-          t.dataset.rom = String(child.dataset.rom || '').slice(0, 4000);
-          if(child.dataset.scr) t.dataset.scr = String(child.dataset.scr).slice(0, 4000);
+          // same ceiling as data-src: a lower cap on rom/scr silently desyncs
+          // data-scr from the rendered text on a long passage
+          t.dataset.rom = String(child.dataset.rom || '').slice(0, 200000);
+          if(child.dataset.scr) t.dataset.scr = String(child.dataset.scr).slice(0, 200000);
           if(child.dataset.flow) t.dataset.flow = String(child.dataset.flow).replace(/[^a-z-]/g, '').slice(0, 16);
           if(/^(s|l|xl)$/.test(child.dataset.size || '')) t.dataset.size = child.dataset.size;
           if(child.dataset.block === '1') t.dataset.block = '1';
@@ -2015,11 +2020,15 @@ function mdFromDoc(doc){
   });
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
-function plainFromDoc(doc){
+function tspanPlain(t, gloss){
+  const rom = t.dataset.rom || t.textContent || '';
+  return gloss && t.dataset.src && t.dataset.src !== rom ? `${rom} [${t.dataset.src}]` : rom;
+}
+function plainFromDoc(doc, gloss){
   const tpl = document.createElement('div');
   tpl.innerHTML = doc || '';
   tpl.querySelectorAll('div.asterism').forEach(d => d.textContent = '\n⁂\n');
-  tpl.querySelectorAll('.tspan').forEach(t => t.textContent = t.dataset.rom || t.textContent);
+  tpl.querySelectorAll('.tspan').forEach(t => t.textContent = tspanPlain(t, gloss));
   // innerText of a detached element has no block separators — walk blocks explicitly
   const BLOCKS = /^(P|DIV|H2|H3|BLOCKQUOTE|UL|OL)$/;
   let out = '';
@@ -2036,6 +2045,8 @@ function plainFromDoc(doc){
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+const MD_DOC_MARK = '<!--tenebrae:doc-->';
+const MD_SCENE_MARK = '<!--tenebrae:scene-->';
 function compile(book, kind){
   // kind: 'md' | 'txt' | 'html'
   const o = book.exportOpts || defaultExportOpts();
@@ -2043,7 +2054,11 @@ function compile(book, kind){
     ? { md: '\n\n⁂\n\n', txt: '\n\n⁂\n\n', html: '<p style="text-align:center;letter-spacing:.3em">⁂</p>' }
     : { md: '\n\n', txt: '\n\n', html: '<p><br></p>' };
   const parts = [];
-  if(kind === 'md') parts.push('# ' + mdEscape(book.title));
+  // '###' does double duty in our own markdown: a scene title AND an in-scene
+  // H2 both render as level 3, so a round trip could not tell them apart and
+  // split one scene into two. These markers say which headings are structural.
+  // Foreign markdown carries none and keeps the level heuristic below.
+  if(kind === 'md') parts.push(MD_DOC_MARK + '\n# ' + mdEscape(book.title));
   else if(kind === 'txt') parts.push(book.title.toUpperCase());
   else parts.push(`<h1>${esc(book.title)}</h1>`);
 
@@ -2056,10 +2071,10 @@ function compile(book, kind){
     }
     const sceneParts = ch.scenes.map(s => {
       let body = kind === 'md' ? mdFromDoc(s.doc)
-               : kind === 'txt' ? plainFromDoc(s.doc)
+               : kind === 'txt' ? plainFromDoc(s.doc, o.sourceGloss)
                : transformExportHTML(s.doc);
       if(o.sceneTitles && s.title){
-        if(kind === 'md') body = '### ' + mdEscape(s.title) + '\n\n' + body;
+        if(kind === 'md') body = MD_SCENE_MARK + '\n### ' + mdEscape(s.title) + '\n\n' + body;
         else if(kind === 'txt') body = s.title + '\n\n' + body;
         else body = `<h3>${esc(s.title)}</h3>` + body;
       }
@@ -2073,10 +2088,12 @@ function compile(book, kind){
 
 function sceneExportData(kind){
   const s = currentScene(); if(!s) return null;
+  const bk = bookById(currentBookId);
+  const gloss = ((bk && bk.exportOpts) || defaultExportOpts()).sourceGloss;
   const title = s.title || 'Untitled scene';
-  if(kind === 'md') return { name: fileSafe(title) + '.md', text: (s.title ? '### ' + mdEscape(s.title) + '\n\n' : '') + mdFromDoc(s.doc) };
-  if(kind === 'txt') return { name: fileSafe(title) + '.txt', text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc) };
-  return { name: title, html: (s.title ? `<h2>${esc(s.title)}</h2>` : '') + transformExportHTML(s.doc), text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc) };
+  if(kind === 'md') return { name: fileSafe(title) + '.md', text: (s.title ? MD_SCENE_MARK + '\n### ' + mdEscape(s.title) + '\n\n' : '') + mdFromDoc(s.doc) };
+  if(kind === 'txt') return { name: fileSafe(title) + '.txt', text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc, gloss) };
+  return { name: title, html: (s.title ? `<h2>${esc(s.title)}</h2>` : '') + transformExportHTML(s.doc), text: (s.title ? s.title + '\n\n' : '') + plainFromDoc(s.doc, gloss) };
 }
 function fileSafe(t){ return (t || 'untitled').replace(/[\\/:*?"<>|]/g, '').trim().slice(0, 60) || 'untitled'; }
 
@@ -2157,6 +2174,10 @@ function exportSheet(scope){
     );
   }
   items.push(
+    { label: 'English gloss in .txt / .docx', checked: o.sourceGloss, keepOpen: true,
+      onTap: () => { o.sourceGloss = !o.sourceGloss; scheduleSave(); exportSheet(scope); } },
+  );
+  items.push(
     { label: 'Copy for Apple Notes', icon: ICONS.copy, onTap: () => {
         if(isBook) copyRich(compile(b, 'html'), compile(b, 'txt'));
         else { const d = sceneExportData('html'); if(d) copyRich(d.html, d.text); }
@@ -2204,7 +2225,7 @@ function exportSheet(scope){
    single-file / zero-dependency / offline architecture holds. Style ids are
    chosen to round-trip through docxToBlocks: Title, Heading1 (chapter),
    Heading2 (scene), Heading3/4 (in-scene H2/H3), Quote, ListBullet/ListNumber. */
-function docxRunsFrom(node, inherit){
+function docxRunsFrom(node, inherit, gloss){
   const runs = [];
   const emit = (text, m) => {
     if(!text) return;
@@ -2224,7 +2245,11 @@ function docxRunsFrom(node, inherit){
       if(tag === 'BR'){ runs.push('<w:r><w:br/></w:r>'); return; }
       if(tag === 'SPAN' && c.classList.contains('tspan')){
         // romanization in italics — glyph fidelity is the v1 spike, never raw PUA here
-        emit(c.dataset.rom || c.textContent, Object.assign({}, m, { i: true }));
+        const rom = c.dataset.rom || c.textContent;
+        emit(rom, Object.assign({}, m, { i: true }));
+        // .docx cannot carry the script, so the English rides along upright and
+        // bracketed: the romanization run stays exactly the romanization
+        if(gloss && c.dataset.src && c.dataset.src !== rom) emit(` [${c.dataset.src}]`, m);
         return;
       }
       const m2 = Object.assign({}, m);
@@ -2249,7 +2274,7 @@ function docxPara(runs, opt){
 }
 const docxTextP = (text, opt) => docxPara([`<w:r><w:t xml:space="preserve">${esc(text)}</w:t></w:r>`], opt);
 
-function docxScenePs(doc){
+function docxScenePs(doc, gloss){
   const tpl = document.createElement('template');
   tpl.innerHTML = doc || '';
   const ps = [];
@@ -2258,15 +2283,15 @@ function docxScenePs(doc){
     if(n.nodeType !== 1) return;
     const tag = n.tagName;
     if(tag === 'DIV' && n.classList.contains('asterism')){ ps.push(docxTextP('⁂', { jc: 'center' })); return; }
-    if(tag === 'H2'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Heading3' })); return; }
-    if(tag === 'H3'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Heading4' })); return; }
-    if(tag === 'BLOCKQUOTE'){ ps.push(docxPara(docxRunsFrom(n), { style: 'Quote' })); return; }
+    if(tag === 'H2'){ ps.push(docxPara(docxRunsFrom(n, null, gloss), { style: 'Heading3' })); return; }
+    if(tag === 'H3'){ ps.push(docxPara(docxRunsFrom(n, null, gloss), { style: 'Heading4' })); return; }
+    if(tag === 'BLOCKQUOTE'){ ps.push(docxPara(docxRunsFrom(n, null, gloss), { style: 'Quote' })); return; }
     if(tag === 'UL' || tag === 'OL'){
       n.querySelectorAll(':scope > li').forEach(li =>
-        ps.push(docxPara(docxRunsFrom(li), tag === 'UL' ? { style: 'ListBullet', num: 1 } : { style: 'ListNumber', num: 2 })));
+        ps.push(docxPara(docxRunsFrom(li, null, gloss), tag === 'UL' ? { style: 'ListBullet', num: 1 } : { style: 'ListNumber', num: 2 })));
       return;
     }
-    ps.push(docxPara(docxRunsFrom(n)));
+    ps.push(docxPara(docxRunsFrom(n, null, gloss)));
   });
   return ps;
 }
@@ -2279,8 +2304,12 @@ function docxBodyXML(book, scope, scene){
       if(o.chapterTitles) ps.push(docxTextP(ch.title, { style: 'Heading1' }));
       const scenes = [];
       ch.scenes.forEach(s => {
-        const body = docxScenePs(s.doc);
-        if(!body.length && !s.title) return;
+        const body = docxScenePs(s.doc, o.sourceGloss);
+        // exactly the markdown rule (compile() filters empty scene parts): a
+        // scene contributes nothing unless it has body text, or a title this
+        // export will actually print. Keeping a hollow titled scene when the
+        // titles are off left two ⁂ in a row where markdown had one.
+        if(!body.length && !(o.sceneTitles && s.title)) return;
         scenes.push({ title: s.title, body });
       });
       scenes.forEach((s, i) => {
@@ -2291,7 +2320,7 @@ function docxBodyXML(book, scope, scene){
     });
   }else{
     if(scene.title) ps.push(docxTextP(scene.title, { style: 'Heading2' }));
-    ps.push.apply(ps, docxScenePs(scene.doc));
+    ps.push.apply(ps, docxScenePs(scene.doc, o.sourceGloss));
   }
   return ps.join('');
 }
@@ -2808,9 +2837,10 @@ function omniScriptText(langId, toks){
     }
     return out;
   };
-  // if NOTHING was translatable there is no script to show; rather than let the
-  // span fall back to Latin, mark the words with the codex's unknown glyph
-  const words = build(false).length ? build(false) : build(true);
+  // if NOTHING was translatable the codex draws no script at all (its own
+  // wing renders the block only `if(cleanText)`). Returning null lets the
+  // caller decline the span outright rather than invent a row of marks.
+  const words = build(false);
   if(!words.length) return null;
   // vertical tongues get one word per line: a line is a column (cols-rtl) or a
   // stave (btt-stave), which is how the codex's own transcribers lay them out
@@ -3139,7 +3169,10 @@ function omniTranslate(w, rawLangId, text){
       });
     });
     return { omni: true, romanization: rom, rendered: null, toks,
-      gloss: parts.map(p => ({ s: p.tok, o: p.drop ? '\u2205' : (p.cel || '\u2014'), g: p.gloss || '', k: !p.unknown && !p.drop, drop: !!p.drop })),
+      // the codex hangs a tagnote off the gloss cell (<span class="tagnote">);
+      // Celan Basic was dropping it, so a grammatical mark the codex shows
+      // never reached the tap sheet. Same shape as the other tongues below.
+      gloss: parts.map(p => ({ s: p.tok, o: p.drop ? '\u2205' : (p.cel || '\u2014'), g: (p.gloss || '') + (p.tag ? ' \u00b7 ' + p.tag : ''), k: !p.unknown && !p.drop, drop: !!p.drop })),
       dir: 'ltr', flow: 'ltr', vertical: false,
       lang: { id: 'celan_basic', name: 'Celan Basic' }, langName: 'Celan Basic', script: 'the Auric runes' };
   }
@@ -3194,24 +3227,48 @@ function decorateAll(root){
   return ensureOmni().then(w => {
     if(!w) return;
     forgeOmniFonts(w);
+    let upgraded = false;
     spans.forEach(sp => {
       const r = omniTranslate(w, sp.dataset.lang, sp.dataset.src);
       if(!r) return;
+      // an imported span arrives as a placeholder from makeTSpan with
+      // rom === src (the English). Refreshing only data-scr left that English
+      // in data-rom forever, so the tap sheet and the span disagreed and every
+      // other format exported the source as if it were the romanization.
+      if(sp.dataset.rom !== r.romanization){ sp.dataset.rom = r.romanization; upgraded = true; }
+      if(r.dir === 'rtl') sp.setAttribute('dir', 'rtl'); else sp.removeAttribute('dir');
       const scr = omniScriptFor(r, w);
       if(scr){
+        if(sp.dataset.scr !== scr) upgraded = true;
         sp.dataset.scr = scr;
-        if(r.flow && r.flow !== 'ltr') sp.dataset.flow = r.flow;
+        if(r.flow && r.flow !== 'ltr') sp.dataset.flow = r.flow; else delete sp.dataset.flow;
         sp.textContent = scr;
       }
     });
+    // the upgrade is the real content now — keep it, don't recompute it forever
+    if(upgraded && root === edContent){ try{ persistEditor(); flushSave(); }catch(e){} }
   });
 }
 /* unified async translate across sample/JSON packs and the Omnilingua host */
+// The embedded codex is the engine from the first instant. Boot installs it
+// (L~5197), but a call that lands before that guard would fall through to
+// codexActive() -> SAMPLE_CODEX and answer in the placeholder cipher. TX-1
+// forbids that on every path, so any entry point that can translate installs
+// the codex first if nothing is loaded yet.
+function ensureCodexInstalled(){
+  if(!state.codex){
+    const ep = embeddedCodexPack();
+    if(ep){ state.codex = ep; state.lastLang = state.lastLang || 'celan_basic'; }
+  }
+  return state.codex;
+}
 function resolveTranslate(langId, text){
+  ensureCodexInstalled();
   if(omniPack()) return ensureOmni().then(w => w ? omniTranslate(w, langId, text) : null);
   try{ return Promise.resolve(translateText(langId, text)); }catch(e){ return Promise.resolve(null); }
 }
 function tonguesList(){
+  ensureCodexInstalled();
   if(omniPack()){
     const meta = omniPack();
     return ensureOmni().then(w => w
@@ -3231,6 +3288,10 @@ function omniScriptFor(r, w){
   // rune mapping for Celan Basic (which has no codex glyph table of its own)
   if(w) forgeOmniFonts(w);
   let scr = omniScriptText(r.lang.id, r.toks || []);
+  // a tongue the forge HAS a font for has already had its say: if it produced
+  // nothing, the codex would write nothing, and dressing the romanization in
+  // another tongue's face is exactly the Latin-in-costume failure to avoid
+  if(!scr && omniForged && omniForged[r.lang.id]) return null;
   if(!scr){
     // engine asleep or tongue unforged: NEVER fall back to Latin — render the
     // romanization through the matching sample script instead
@@ -3249,12 +3310,17 @@ function spanFromResult(r, src, w){
   if(r.dir === 'rtl') el.setAttribute('dir', 'rtl');
   el.setAttribute('contenteditable', 'false');
   if(r.omni){
+    const forged = !!(omniForged && omniForged[r.lang.id]);
     const scr = omniScriptFor(r, w); // w may be null — sample-script fallback still applies
     if(scr){
       el.dataset.scr = scr;
       if(r.flow && r.flow !== 'ltr') el.dataset.flow = r.flow;
       el.textContent = scr;
-    }else el.textContent = r.romanization; // upgraded to script by decorateAll once the engine wakes
+    }
+    // forged tongue with no script means the codex would write nothing here;
+    // leave it empty so the caller declines the span rather than showing Latin.
+    // Unforged (engine still waking) keeps the romanization for decorateAll.
+    else el.textContent = forged ? '' : r.romanization;
   }else el.textContent = r.rendered;
   return el;
 }
@@ -3289,6 +3355,12 @@ function retranslateSpan(el, langId, src){
   return resolveTranslate(useLang, useSrc).then(r => {
     if(!r) return null;
     const fresh = spanFromResult(r, useSrc, omniWin);
+    // same rule as insertTranslation: never replace a visible span with an
+    // invisible one — keep the span the author can still see and tap
+    if(!fresh.textContent.trim()){
+      toast(`${r.langName || r.lang.name} has no writing for that`);
+      return null;
+    }
     fresh.dataset.tsnew = '1';
     let ok = false;
     try{ ok = edContent.contains(el) && edApplyHTML(rangeAround(el), spanOuterHTML(fresh)); }catch(e){}
@@ -3306,14 +3378,24 @@ function selTextFromRange(range){
   try{
     const holder = document.createElement('div');
     holder.appendChild(range.cloneContents());
-    holder.querySelectorAll('.tspan').forEach(t => t.textContent = t.dataset.rom || '');
+    // a swallowed span contributes the author's ENGLISH, never its romanization:
+    // translating a translation would compile Tenebrae as if it were English
+    holder.querySelectorAll('.tspan').forEach(t => {
+      t.replaceWith(document.createTextNode(t.dataset.src || t.dataset.rom || ''));
+    });
+    // a selection inside ONE block is the author's exactly, edges included; a
+    // cross-block one needs separators injected, and those are ours to trim
+    const crossBlock = !!holder.querySelector('p,div,h2,h3,blockquote,li,br');
     // textContent carries no block separators \u2014 a cross-paragraph selection
     // would fuse its boundary words without these
     holder.querySelectorAll('p,div,h2,h3,blockquote,li,br').forEach(b => {
       b.before(document.createTextNode(' '));
       b.after(document.createTextNode(' '));
     });
-    return (holder.textContent || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    // an NBSP the author typed is theirs to keep; only the pad placeTSpan writes
+    // beside a span is ours to drop, and that one is already gone with the span
+    const flat = (holder.textContent || '').replace(/[^\S\u00A0]+/g, ' '); // spare the NBSP
+    return crossBlock ? flat.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, '') : flat;
   }catch(e){ return ''; }
 }
 function translateSheet(selText, sceneId){
@@ -3341,6 +3423,14 @@ function insertTranslation(langId, src){
     if(!r){ toast(omniPack() && !omniWin ? 'The codex is still waking \u2014 try again in a moment' : 'That tongue is not in this codex'); return; }
     edSelRange = savedRange;
     const span = spanFromResult(r, src, omniWin);
+    // a selection the tongue has nothing to say about (punctuation only, or a
+    // word the grammar drops) renders to nothing. Placing that span would
+    // swallow the author's characters into an invisible, un-tappable element —
+    // leave the text exactly where it is instead.
+    if(!span.textContent.trim()){
+      toast(`${r.langName || r.lang.name} has no writing for that`);
+      return;
+    }
     placeTSpan(span, r.langName || r.lang.name);
   });
 }
@@ -3409,6 +3499,22 @@ function placeTSpan(span, langLabel){
       range = sel.rangeCount ? sel.getRangeAt(0) : null;
     }catch(e){}
   }
+  // Where the span BELONGS. execCommand('insertHTML') hoists it out when the
+  // selection ran to the end of its block — the heading kept "a" and the
+  // translation landed beside it as a sibling — and drops any inline marks the
+  // replaced text carried. Remember both, then put them back if it does.
+  const INLINE_KEEP = ['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL'];
+  let hostBlock = null, inlineChain = [];
+  if(range){
+    const start = range.startContainer;
+    const startEl = start.nodeType === 1 ? start : start.parentElement;
+    if(startEl && edContent.contains(startEl)){
+      hostBlock = blockOf(startEl);
+      for(let n = startEl; n && n !== hostBlock && n !== edContent; n = n.parentElement){
+        if(INLINE_KEEP.indexOf(n.tagName) > -1) inlineChain.push(n.tagName);
+      }
+    }
+  }
   let placed = false;
   try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + '\u00A0'); }catch(e){}
   if(placed && !edContent.querySelector('.tspan[data-tsnew]')){
@@ -3429,11 +3535,29 @@ function placeTSpan(span, langLabel){
     edContent.appendChild(p);
   }
   const live = edContent.querySelector('.tspan[data-tsnew]');
+  if(live){
+    // back inside the block it came from, carrying its pad with it
+    if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)){
+      const pad = live.nextSibling;
+      hostBlock.appendChild(live);
+      if(pad && pad.nodeType === 3 && /^[\u00A0\s]/.test(pad.nodeValue)) hostBlock.appendChild(pad);
+    }
+    // and back inside the bold/italic/underline run it replaced text in
+    for(const tag of inlineChain){
+      if(live.closest(tag.toLowerCase())) continue;
+      const wrap = document.createElement(tag);
+      live.replaceWith(wrap);
+      wrap.appendChild(live);
+    }
+  }
   if(live) delete live.dataset.tsnew;
   delete span.dataset.tsnew;
   edSelRange = null;
   try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
   syncEmpty(); updateCount(); persistEditor();
+  // a translation is a deliberate act, not a keystroke: it must not sit in the
+  // 500 ms typing debounce where a reload can still lose it
+  flushSave();
   toast(`Rendered in ${langLabel}`);
 }
 function glossHTML(gloss){
@@ -3457,7 +3581,7 @@ function tspanSheet(el){
     { label: 'Edit source & retranslate', icon: ICONS.pencil, onTap: () => {
         promptSheet('Source Text', { value: src, placeholder: 'Original line' }, v => {
           if(!v) return;
-          retranslateSpan(el, null, v).then(() => { persistEditor(); updateCount(); });
+          retranslateSpan(el, null, v).then(() => { persistEditor(); updateCount(); flushSave(); });
         });
       } },
     { label: 'Change tongue…', icon: ICONS.rune, onTap: () => {
@@ -3465,7 +3589,7 @@ function tspanSheet(el){
           actionSheet('Render In…', langs.map(l => ({
             label: l.name, icon: ICONS.rune,
             checked: l.id === langId || omniLangId(l.id) === omniLangId(langId),
-            onTap: () => { retranslateSpan(el, l.id, null).then(() => persistEditor()); }
+            onTap: () => { retranslateSpan(el, l.id, null).then(() => { persistEditor(); flushSave(); }); }
           })));
         });
       } },
@@ -3476,14 +3600,14 @@ function tspanSheet(el){
           checked: (el.dataset.size || '') === k,
           onTap: () => {
             if(k) el.dataset.size = k; else delete el.dataset.size;
-            persistEditor(); toast('Script size set');
+            persistEditor(); flushSave(); toast('Script size set');
           }
         })));
       } },
     { label: el.dataset.block === '1' ? 'Full width — on' : 'Full width — off', icon: ICONS.para,
       checked: el.dataset.block === '1', onTap: () => {
         if(el.dataset.block === '1') delete el.dataset.block; else el.dataset.block = '1';
-        persistEditor();
+        persistEditor(); flushSave();
         toast(el.dataset.block === '1' ? 'Runs margin to margin' : 'Back inline with the prose');
       } },
     { label: 'Copy romanization', icon: ICONS.copy, onTap: () => {
@@ -3496,7 +3620,7 @@ function tspanSheet(el){
         try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), src); }catch(e){}
         if(!ok) el.replaceWith(document.createTextNode(src));
         normalizeSpacing(blk);
-        persistEditor(); updateCount(); toast('Back to the source line');
+        persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
       } },
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
         const blk = blockOf(el);
@@ -3504,7 +3628,7 @@ function tspanSheet(el){
         try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), ''); }catch(e){}
         if(!ok) el.remove();
         normalizeSpacing(blk);
-        persistEditor(); updateCount(); syncEmpty();
+        persistEditor(); updateCount(); syncEmpty(); flushSave();
       } }
     ]);
   });
@@ -4392,6 +4516,7 @@ function textishBlocks(raw){
 
   const blocks = [];
   let paraBuf = [], qBuf = [], blankRun = 0, prevBlank = true, softInjected = 0;
+  let ourMarkdown = false, nextHeadIsScene = false;
   const flushP = () => { if(paraBuf.length){ blocks.push({ k: 'p', html: inlineMD(paraBuf.join(' ')) }); paraBuf = []; } };
   const flushQ = () => { if(qBuf.length){ blocks.push({ k: 'q', html: inlineMD(qBuf.join(' ')) }); qBuf = []; } };
 
@@ -4409,8 +4534,14 @@ function textishBlocks(raw){
     }
     blankRun = 0;
     if(SEP_TEXT.test(t)){ flushP(); flushQ(); blocks.push({ k: 'sep' }); prevBlank = true; continue; }
+    if(t === MD_DOC_MARK){ flushP(); flushQ(); ourMarkdown = true; blocks.push({ k: 'ourmd' }); continue; }
+    if(t === MD_SCENE_MARK){ flushP(); flushQ(); nextHeadIsScene = true; continue; }
     const hm = t.match(/^(#{1,6})\s+(.+)$/);
-    if(hm){ flushP(); flushQ(); blocks.push({ k: 'h', level: hm[1].length, html: inlineMD(hm[2].trim()) }); prevBlank = false; continue; }
+    if(hm){
+      flushP(); flushQ();
+      blocks.push({ k: 'h', level: hm[1].length, html: inlineMD(hm[2].trim()), scene: nextHeadIsScene || undefined });
+      nextHeadIsScene = false; prevBlank = false; continue;
+    }
     const qm = t.match(/^>\s?(.*)$/);
     if(qm){ flushP(); if(qm[1].trim()) qBuf.push(qm[1].trim()); prevBlank = false; continue; }
     const um = t.match(/^[-*+]\s+(.+)$/);
@@ -4426,7 +4557,7 @@ function textishBlocks(raw){
     prevBlank = false;
   }
   flushP(); flushQ();
-  return { blocks, meta: { soft: softInjected > 0 } };
+  return { blocks, meta: { soft: softInjected > 0, ourMarkdown } };
 }
 
 /* -------- HTML -------- */
@@ -4757,6 +4888,10 @@ function epubToBlocks(files){
 /* -------- structure detection -------- */
 function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   let blocks = rawBlocks.filter(Boolean);
+  // our own markdown stamps itself, so scene structure comes from the markers
+  // rather than from guessing which heading level means "scene"
+  const ourMd = blocks.some(b => b.k === 'ourmd');
+  blocks = blocks.filter(b => b.k !== 'ourmd');
   const hasChbreak = blocks.some(b => b.k === 'chbreak');
   let title = null;
   const ti = blocks.findIndex(b => b.k === 'title');
@@ -4782,8 +4917,10 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   }
   const hardSep = blocks.some(b => b.k === 'sep' && !b.soft);
   const softSep = blocks.some(b => b.k === 'sep' && b.soft);
+  // our own markdown says outright which headings are scene titles, so a
+  // level-3 heading the author wrote INSIDE a scene stays inside it
   let mode = (opts && opts.sceneMode) || 'auto';
-  if(mode === 'auto') mode = hardSep ? 'sep' : (sceneLevel != null ? 'h' : (softSep ? 'sep' : 'none'));
+  if(mode === 'auto') mode = ourMd ? 'mark' : hardSep ? 'sep' : (sceneLevel != null ? 'h' : (softSep ? 'sep' : 'none'));
 
   const chapters = [];
   let ch = null, sc = null;
@@ -4795,6 +4932,12 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
     if(b.k === 'chbreak'){ openCh(b.title); continue; }
     if(b.k === 'h'){
       if(!hasChbreak && b.level === chapterLevel){ openCh(plainOfHTML(b.html)); continue; }
+      if(mode === 'mark'){
+        if(b.scene){ openSc(plainOfHTML(b.html)); continue; }
+        // unmarked heading in our own markdown: in-scene prose heading
+        put({ k: b.level <= (chapterLevel != null ? chapterLevel : 2) + 1 ? 'h2' : 'h3', html: b.html });
+        continue;
+      }
       if(sceneLevel != null && b.level === sceneLevel && mode === 'h'){ openSc(plainOfHTML(b.html)); continue; }
       const base = (sceneLevel != null && mode === 'h') ? sceneLevel
         : (sceneLevel != null ? sceneLevel - 1 : (chapterLevel != null ? chapterLevel : 0));
@@ -4802,7 +4945,7 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
       continue;
     }
     if(b.k === 'sep'){
-      if(mode === 'sep'){ if(sc && sc.blocks.length) openSc(''); }
+      if(mode === 'sep' || mode === 'mark'){ if(sc && sc.blocks.length) openSc(''); }
       else if(!b.soft) put({ k: 'ast' });
       continue;
     }
@@ -4830,7 +4973,7 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   return {
     title: (title || fallbackTitle || 'Imported Manuscript').trim(),
     chapters: out,
-    meta: { mode, hardSep, softSep, sceneLevel, chapterLevel, hasChbreak }
+    meta: { mode: mode === 'mark' ? 'h' : mode, ourMd, hardSep, softSep, sceneLevel, chapterLevel, hasChbreak }
   };
 }
 function blocksToDoc(blocks){
@@ -4981,6 +5124,12 @@ function commitImport(model){
   openBook(b.id);
   const scN = model.chapters.reduce((n, c) => n + c.scenes.length, 0);
   toast(`Imported ${plural(model.chapters.length, 'chapter')} · ${plural(scN, 'scene')}`);
+  // spans arrive from an import as placeholders carrying only tongue + source;
+  // hand them to the codex now rather than waiting for the author to open each
+  // scene, so search, word counts and every export see the real romanization
+  if(b.chapters.some(ch => ch.scenes.some(s => (s.doc || '').indexOf('tspan') > -1))){
+    rerenderAllSpans().catch(() => {});
+  }
 }
 
 $('#import-input').addEventListener('change', async e => {
@@ -5005,6 +5154,36 @@ async function backupAll(){
   const stamp = new Date().toISOString().slice(0, 10);
   download(`tenebrae-backup-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
 }
+// Every path that adopts a foreign state object runs this: boot from storage
+// AND restore from a backup file. A book missing chapters[] passes the shallow
+// shape check and then throws in chapterWords/renderLibrary, which used to lose
+// the whole library to a half-written backup.
+function migrateBooks(books){
+  (Array.isArray(books) ? books : []).forEach(b => {
+    b.exportOpts = Object.assign(defaultExportOpts(), b.exportOpts || {});
+    b.paraStyle = b.paraStyle || 'spaced';
+    b.id = b.id || uid();
+    b.title = typeof b.title === 'string' ? b.title : 'Untitled book';
+    b.chapters = Array.isArray(b.chapters) ? b.chapters : [];
+    b.chapters.forEach(c => {
+      c.id = c.id || uid();
+      c.title = typeof c.title === 'string' ? c.title : 'Chapter';
+      c.scenes = Array.isArray(c.scenes) ? c.scenes : [];
+      c.scenes.forEach(sc => {
+        sc.id = sc.id || uid();
+        sc.doc = typeof sc.doc === 'string' ? sc.doc : '';
+        sc.words = typeof sc.words === 'number' ? sc.words : 0;
+      });
+    });
+    b.cards = (Array.isArray(b.cards) ? b.cards : []).map(c => ({
+      id: c.id || uid(), type: c.type || 'person', title: c.title || '',
+      aliases: c.aliases || [], keywords: c.keywords || [],
+      quotes: c.quotes || [], notes: c.notes || '',
+      created: c.created || Date.now(), updated: c.updated || Date.now()
+    }));
+  });
+  return books;
+}
 function offerRestore(text){
   try{
     const data = JSON.parse(text);
@@ -5012,6 +5191,7 @@ function offerRestore(text){
     if(!st || !Array.isArray(st.books)) throw new Error('bad shape');
     confirmSheet('Restore this backup?', `${plural(st.books.length, 'book')} — replaces everything currently here.`, 'Restore', () => {
       state = st;
+      migrateBooks(state.books);
       state.codex = state.codex || null;
       // omni-host packs carry no languages[] — same exemption as the boot guard
       if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null;
@@ -5178,19 +5358,7 @@ async function boot(){
   });
   if(saved && Array.isArray(saved.books)){
     state = saved;
-    // gentle migration guard
-    state.books.forEach(b => {
-      b.exportOpts = b.exportOpts || defaultExportOpts();
-      b.paraStyle = b.paraStyle || 'spaced';
-      b.chapters = b.chapters || [];
-      b.chapters.forEach(c => c.scenes = c.scenes || []);
-      b.cards = (b.cards || []).map(c => ({
-        id: c.id || uid(), type: c.type || 'person', title: c.title || '',
-        aliases: c.aliases || [], keywords: c.keywords || [],
-        quotes: c.quotes || [], notes: c.notes || '',
-        created: c.created || Date.now(), updated: c.updated || Date.now()
-      }));
-    });
+    migrateBooks(state.books);
   }
   state.codex = state.codex || null;
   if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null; // reject malformed packs from old saves

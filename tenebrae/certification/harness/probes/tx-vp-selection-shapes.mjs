@@ -30,7 +30,7 @@ await page.keyboard.type('a heading of stone');
 await page.keyboard.press('Enter');
 await page.keyboard.type('the quoted oath holds');
 await page.keyboard.press('Enter');
-await page.keyboard.type('the bullet item burns');
+await page.keyboard.type('the bullet stone gate burns');
 await page.keyboard.press('Enter');
 await page.keyboard.type('the old king waits alone');
 await wait(page, 400);
@@ -50,7 +50,7 @@ await page.click('#fb-aa'); await wait(page, 250);
 await caret('heading of stone'); await page.click('#aa-panel [data-block="h2"]'); await wait(page, 300);
 await caret('quoted oath');      await page.click('#aa-panel [data-block="blockquote"]'); await wait(page, 300);
 await page.click('#fb-aa'); await wait(page, 200);
-await caret('bullet item');      await page.click('[data-cmd="insertUnorderedList"]'); await wait(page, 400);
+await caret('stone gate');       await page.click('[data-cmd="insertUnorderedList"]'); await wait(page, 400);
 
 const structure = () => page.evaluate(() => {
   const ed = document.querySelector('#ed-content');
@@ -103,7 +103,7 @@ const CASES = [
   { name: 'bold run',       sel: '#ed-content b, #ed-content strong', phrase: 'sea remembers',    lang: 'Celan High',   keep: 'b,strong' },
   { name: 'heading',        sel: '#ed-content h2',                    phrase: 'heading of stone', lang: 'Kildaren',     keep: 'h2' },
   { name: 'blockquote',     sel: '#ed-content blockquote',            phrase: 'quoted oath',      lang: 'Kerrackian',   keep: 'blockquote' },
-  { name: 'list item',      sel: '#ed-content li',                    phrase: 'bullet item',      lang: 'Calgridarian', keep: 'li' },
+  { name: 'list item',      sel: '#ed-content li',                    phrase: 'stone gate',       lang: 'Calgridarian', keep: 'li' },
   { name: 'trailing space', sel: '#ed-content',                       phrase: 'the old king ',    lang: 'Evernessian',  keep: null },
 ];
 
@@ -164,12 +164,15 @@ const parity = await page.evaluate(async () => {
   const out = [];
   for (const el of document.querySelectorAll('#ed-content .tspan')) {
     const id = el.dataset.lang, src = el.dataset.src;
-    let codexRom;
+    let codexRom, codexWritten = null;
     if (id === 'celan_basic') codexRom = w.translateE2C(src).filter(p => p.cel && !p.drop).map(p => p.cel).join(' ');
     else {
       const T = C.TRANS[id], res = C.compileText(T, src, 'e2l');
-      const lines = res.lines || [(res.parts || []).filter(p => !p.drop && p.out).map(p => ({ t: p.out }))];
+      const lines = res.lines || [(res.parts || []).filter(p => !p.drop && p.out).map(p => ({ t: p.out, u: !!p.unknown }))];
       codexRom = lines.map(l => l.map(p => p.t).join(' ')).join(' ');
+      // what the codex actually DRAWS: cleanText, i.e. the parts it could
+      // translate, each stripped to [letters, digits, ' ’ -] before matching
+      codexWritten = lines.map(l => l.filter(p => !p.u).map(p => p.t).join(' ')).join(' ');
     }
     let keysOK = null, decoded = null, expect = null;
     const f = (window.tenebrae._forge.map() || {})[id];
@@ -178,10 +181,12 @@ const parity = await page.evaluate(async () => {
       decoded = (el.dataset.scr || '').split(/[\n ]+/).filter(Boolean).map(word =>
         [...word].map(ch => { const i = ch.charCodeAt(0) - f.base;
           return i >= 0 && i < sc.glyphs.length ? sc.glyphs[i].k.toLowerCase() : (i === sc.glyphs.length ? '·' : '?'); }));
-      expect = codexRom.split(/\s+/).filter(Boolean).map(word => matchKeys(word, m));
+      expect = String(codexWritten != null ? codexWritten : codexRom).split(/\s+/).filter(Boolean)
+        .map(word => word.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean)
+        .map(word => matchKeys(word, m));
       keysOK = JSON.stringify(decoded) === JSON.stringify(expect);
     }
-    out.push({ id, src, rom: el.dataset.rom, codexRom, romOK: el.dataset.rom === codexRom, keysOK,
+    out.push({ id, src, rom: el.dataset.rom, codexRom, codexWritten, romOK: el.dataset.rom === codexRom, keysOK,
       decoded: keysOK === false ? decoded : undefined, expect: keysOK === false ? expect : undefined });
   }
   return out;
@@ -199,6 +204,21 @@ const staves = await page.evaluate(() => [...document.querySelectorAll('#ed-cont
   .filter(el => el.dataset.lang !== 'celan_basic')
   .map(el => ({ lang: el.dataset.lang, romWords: (el.dataset.rom || '').split(/\s+/).filter(Boolean).length,
                 scrGroups: (el.dataset.scr || '').split(/[\n ]+/).filter(Boolean).length, rom: el.dataset.rom })));
+// an untranslated word is never written in the script, so compare against the
+// count the codex would draw, not against every romanized word
+const written = await page.evaluate(async () => {
+  const w = await window.tenebrae.engine(), C = w.CODEX, out = {};
+  for(const el of document.querySelectorAll('#ed-content .tspan[data-omni]')){
+    const id = el.dataset.lang;
+    if(!C.TRANS[id]) continue;
+    const res = C.compileText(C.TRANS[id], el.dataset.src, 'e2l');
+    const lines = res.lines || [(res.parts || []).filter(p => !p.drop && p.out).map(p => ({ t: p.out, u: !!p.unknown }))];
+    out[id] = lines.map(l => l.filter(p => !p.u).map(p => p.t).join(' ')).join(' ')
+      .split(/\s+/).filter(Boolean).map(x => x.replace(/[^\p{L}\p{N}'\u2019-]/gu, '')).filter(Boolean).length;
+  }
+  return out;
+});
+staves.forEach(s2 => { if(written[s2.lang] != null) s2.romWords = written[s2.lang]; });
 console.log('\nword groups:', JSON.stringify(staves));
 ck('the script form carries one word-group per romanized word (as the codex typesetter splits it)',
    staves.every(s => s.romWords === s.scrGroups),

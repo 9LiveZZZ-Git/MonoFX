@@ -88,7 +88,11 @@ const parsed = await page.evaluate(async cssText => {
   const asExported = count(cssText);
   // counterfactual: only change is escaping the ASCII apostrophe inside the
   // single-quoted family name
-  const fixed = count(cssText.replace(/font-family:'([^;{}]*)'/g, (m, fam) => `font-family:'${fam.replace(/'/g, "\\'")}'`));
+  // counterfactual done properly: restate the family as a DOUBLE-quoted string,
+  // which needs no escaping at all. Re-escaping an already-escaped apostrophe
+  // produced a broken sheet and made a correct export look like a regression.
+  const fixed = count(cssText.replace(/font-family:'((?:[^'\\]|\\.)*)'/g,
+    (m, fam) => `font-family:"${fam.replace(/\\'/g, "'")}"`));
   return { asExported, fixed };
 }, css);
 console.log('CSSOM as-exported        :', JSON.stringify(parsed.asExported));

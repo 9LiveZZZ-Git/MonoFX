@@ -19,7 +19,9 @@ console.log('book file:', book.name);
 console.log('--- book.txt ---\n' + book.text + '\n---------------');
 
 const t = book.text;
-const rom = await page.evaluate(() => window.tenebrae.translate('celan-basic', 'sea remembers').romanization);
+// translate() is the legacy sample-cipher seam; translate2() is the real
+// resolver, which under the embedded codex is what the export actually holds
+const rom = await page.evaluate(async () => (await window.tenebrae.translate2('celan_basic', 'sea remembers')).romanization);
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
 const checks = [
   has('book title uppercased',    /^PROBE TXT BOOK$/m.test(t)),
