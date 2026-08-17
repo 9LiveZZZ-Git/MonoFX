@@ -1039,7 +1039,7 @@ function sanitizeHTML(html){
           const t = document.createElement('span');
           t.className = 'tspan';
           t.dataset.lang = String(child.dataset.lang).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
-          t.dataset.src = String(child.dataset.src).slice(0, 2000);
+          t.dataset.src = String(child.dataset.src).slice(0, 200000); // never lose the author's English
           t.dataset.rom = String(child.dataset.rom || '').slice(0, 4000);
           if(child.dataset.scr) t.dataset.scr = String(child.dataset.scr).slice(0, 4000);
           if(child.dataset.flow) t.dataset.flow = String(child.dataset.flow).replace(/[^a-z-]/g, '').slice(0, 16);
@@ -1059,6 +1059,14 @@ function sanitizeHTML(html){
         }else{
           unwrap(child);
         }
+        continue;
+      }
+      if((tag === 'UL' || tag === 'OL') && child.parentNode && child.parentNode.nodeName === 'P'){
+        // a list inside a paragraph is invalid and makes execCommand drop
+        // inserted nodes — lift it out to the top level
+        const par = child.parentNode;
+        par.parentNode.insertBefore(child, par.nextSibling);
+        if(!par.childNodes.length) par.remove();
         continue;
       }
       if(tag === 'DIV'){ // stray divs become paragraphs
@@ -2434,14 +2442,17 @@ function epubFontEntries(){
   const seen = new Set();
   return fonts.filter(f => { if(!f.bytes || seen.has(f.family)) return false; seen.add(f.family); return true; });
 }
+// a CSS string is single-quoted: an apostrophe in a family name ("Drover's
+// Notch") would otherwise open an unterminated string and swallow the sheet
+function cssq(name){ return String(name).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 function epubLangCSS(){
   const rules = [];
-  for(const l of SAMPLE_CODEX.languages) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${l.fontFamily}'}`);
+  for(const l of SAMPLE_CODEX.languages) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${cssq(l.fontFamily)}'}`);
   const c = state.codex;
   if(c && Array.isArray(c.languages)) for(const l of c.languages)
-    if(l.fontFamily) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${String(l.fontFamily).replace(/'/g, '')}'}`);
+    if(l.fontFamily) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${cssq(l.fontFamily)}'}`);
   if(omniForged){
-    for(const [langId, f] of Object.entries(omniForged)) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${f.family}'}`);
+    for(const [langId, f] of Object.entries(omniForged)) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${cssq(f.family)}'}`);
     rules.push(`.tspan[data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes'}`);
   }
   return rules.join('\n');
@@ -2468,7 +2479,7 @@ function epubFile(book){
   const faces = fonts.map((f, i) => {
     entries.push({ name: `OEBPS/fonts/f${i + 1}.ttf`, data: f.bytes });
     manifest.push(`<item id="font${i + 1}" href="fonts/f${i + 1}.ttf" media-type="font/ttf"/>`);
-    return `@font-face{font-family:'${f.family}';src:url('fonts/f${i + 1}.ttf') format('truetype')}`;
+    return `@font-face{font-family:'${cssq(f.family)}';src:url('fonts/f${i + 1}.ttf') format('truetype')}`;
   });
   entries.push({ name: 'OEBPS/style.css', data: faces.join('\n') + '\n' + EPUB_CSS + '\n' + epubLangCSS() });
   entries.push({ name: 'OEBPS/content.opf', data: `<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="en"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:tenebrae:${esc(book.id)}</dc:identifier><dc:title>${esc(book.title)}</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">${modified}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>` });
@@ -2548,10 +2559,10 @@ function forgeTTF(family, glyphs, cmapPairs){
   const bytes = arr => Uint8Array.from(arr);
   let gXMin = 9999, gYMin = 9999, gXMax = -9999, gYMax = -9999, maxPts = 0, maxCtr = 0;
 
-  const glyfParts = [], locas = [0];
+  const glyfParts = [], locas = [0], glyphXMin = [];
   let glyfLen = 0;
   for(const g of glyphs){
-    if(!g.contours.length){ locas.push(glyfLen); glyfParts.push(new Uint8Array(0)); continue; }
+    if(!g.contours.length){ glyphXMin.push(0); locas.push(glyfLen); glyfParts.push(new Uint8Array(0)); continue; }
     const pts = [], ends = [];
     let xMin = 9999, yMin = 9999, xMax = -9999, yMax = -9999;
     for(const c of g.contours){
@@ -2566,6 +2577,7 @@ function forgeTTF(family, glyphs, cmapPairs){
     gXMin = Math.min(gXMin, xMin); gYMin = Math.min(gYMin, yMin);
     gXMax = Math.max(gXMax, xMax); gYMax = Math.max(gYMax, yMax);
     maxPts = Math.max(maxPts, pts.length); maxCtr = Math.max(maxCtr, g.contours.length);
+    glyphXMin.push(xMin);
     const out = [...i16(g.contours.length), ...i16(xMin), ...i16(yMin), ...i16(xMax), ...i16(yMax)];
     ends.forEach(e => out.push(...u16(e)));
     out.push(...u16(0)); // no instructions
@@ -2582,7 +2594,8 @@ function forgeTTF(family, glyphs, cmapPairs){
   const glyf = new Uint8Array(glyfLen);
   { let o = 0; for(const p of glyfParts){ glyf.set(p, o); o += p.length; } }
   const loca = bytes(locas.flatMap(u32));
-  const hmtx = bytes(glyphs.flatMap(g => [...u16(g.advance), ...i16(0)]));
+  // lsb must equal the glyph's own xMin (head.flags bit 1 asserts exactly that)
+  const hmtx = bytes(glyphs.flatMap((g, i) => [...u16(g.advance), ...i16(glyphXMin[i] || 0)]));
   const head = bytes([
     0, 1, 0, 0, 0, 1, 0, 0, ...u32(0), 0x5F, 0x0F, 0x3C, 0xF5, ...u16(3), ...u16(1000),
     ...u32(0), ...u32(0), ...u32(0), ...u32(0), // dates zero: deterministic
@@ -2749,7 +2762,7 @@ function omniScriptText(langId, toks){
     for(const m of omniMatchWord(t, f.matcher)){
       const k = m.g && m.g.k.toLowerCase();
       if(k && f.gidx[k] != null) out += String.fromCharCode(f.base + f.gidx[k]);
-      else if(/\S/.test(m.t)) out += f.dot;
+      else if(m.t) out += f.dot; // the codex draws its mark for ANY unmatched token, whitespace included
     }
     return out;
   };
@@ -3009,7 +3022,11 @@ function ensureOmni(){
   omniBooting = (async () => {
     if(window.__omniInjected){ omniWin = window.__omniInjected; return omniWin; } // test seam
     const pk = omniPack();
-    const html = window.__codexEngineHTML || (pk && pk.embedded ? decodeEmbeddedCodex() : await kvGet('codexEngine'));
+    // an embedded pack is served by THIS file, never by a stale global or a
+    // leftover imported engine in storage
+    const html = (pk && pk.embedded)
+      ? decodeEmbeddedCodex()
+      : (window.__codexEngineHTML || await kvGet('codexEngine'));
     if(!html){ omniBooting = null; return null; }
     window.__codexEngineHTML = html;
     return await new Promise(resolve => {
@@ -3068,10 +3085,15 @@ function omniTranslate(w, rawLangId, text){
     const parts = w.translateE2C(String(text));
     const kept = parts.filter(p => p.cel && !p.drop);
     const rom = kept.map(p => p.cel).join(' ');
-    const toks = kept.map(p => {
-      const clean = String(p.cel).replace(/[^\w\u00e9\u00e4\u00ed\u00c9\u00c4\u00cd'\u2019-]/g, '');
-      const at = clean ? String(p.cel).indexOf(clean) : 0;
-      return { t: clean, punct: clean ? String(p.cel).slice(at + clean.length) : String(p.cel), u: !!p.unknown };
+    // one token per WORD, splitting leading word-chars from trailing punctuation
+    // ("na mé" is two words; "123456.56" keeps its tail) — the old strip-and-
+    // indexOf lost characters whenever the stripped form was not a substring
+    const toks = [];
+    kept.forEach(p => {
+      String(p.cel).split(/\s+/).filter(Boolean).forEach(word => {
+        const m = /^([\w\u00e9\u00e4\u00ed\u00c9\u00c4\u00cd'\u2019-]*)([\s\S]*)$/.exec(word) || [word, word, ''];
+        toks.push({ t: m[1], punct: m[2], u: !!p.unknown });
+      });
     });
     return { omni: true, romanization: rom, rendered: null, toks,
       gloss: parts.map(p => ({ s: p.tok, o: p.drop ? '\u2205' : (p.cel || '\u2014'), g: p.gloss || '', k: !p.unknown && !p.drop, drop: !!p.drop })),
@@ -3192,6 +3214,22 @@ function spanFromResult(r, src, w){
   return el;
 }
 function makeTSpan(langId, src){
+  // When a codex is the engine (always, by default), an imported document's
+  // spans must be regenerated by THAT engine — not by the legacy sample
+  // cipher, which would also collapse an unknown tongue id onto languages[0]
+  // and destroy the recorded tongue. Emit a faithful placeholder carrying the
+  // tongue + source; decorateAll/rerenderAllSpans fill in the script.
+  if(omniPack()){
+    const el = document.createElement('span');
+    el.className = 'tspan';
+    el.dataset.lang = langId;
+    el.dataset.src = src;
+    el.dataset.rom = src;
+    el.dataset.omni = '1';
+    el.setAttribute('contenteditable', 'false');
+    el.textContent = src;
+    return el;
+  }
   const r = translateText(langId, src);
   return spanFromResult(r, src, null);
 }
@@ -3278,9 +3316,15 @@ function edApplyText(range, text){
   sel.addRange(range);
   return text ? document.execCommand('insertText', false, text) : document.execCommand('delete', false);
 }
-function rangeAround(el){
+function rangeAround(el, absorbPad){
   const r = document.createRange();
   r.selectNode(el);
+  // placeTSpan writes span + NBSP; reverting or removing must consume that
+  // same pad, or repeated translate/revert cycles accumulate spaces
+  if(absorbPad){
+    const nx = el.nextSibling;
+    if(nx && nx.nodeType === 3 && /^\u00A0/.test(nx.nodeValue)) r.setEnd(nx, 1);
+  }
   return r;
 }
 function spanOuterHTML(span){
@@ -3300,7 +3344,19 @@ function placeTSpan(span, langLabel){
   }
   let placed = false;
   try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + '\u00A0'); }catch(e){}
-  if(!placed){ // last-ditch path, outside undo history
+  if(placed && !edContent.querySelector('.tspan[data-tsnew]')){
+    // insertHTML reported success but dropped the element (seen inside
+    // list items): put it in by hand at the caret rather than lose the line
+    try{
+      const sel = window.getSelection();
+      const r2 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      if(r2 && edContent.contains(r2.commonAncestorContainer)){
+        r2.insertNode(span);
+        r2.collapse(false);
+      }else placed = false;
+    }catch(e){ placed = false; }
+  }
+  if(!placed && !edContent.querySelector('.tspan[data-tsnew]')){ // last-ditch path
     const p = document.createElement('p');
     p.appendChild(span);
     edContent.appendChild(p);
@@ -3352,13 +3408,13 @@ function tspanSheet(el){
       } },
     { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el), src); }catch(e){}
+        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), src); }catch(e){}
         if(!ok) el.replaceWith(document.createTextNode(src));
         persistEditor(); updateCount(); toast('Back to the source line');
       } },
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el), ''); }catch(e){}
+        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), ''); }catch(e){}
         if(!ok) el.remove();
         persistEditor(); updateCount(); syncEmpty();
       } }
@@ -3485,6 +3541,10 @@ async function importCodexPack(file){
 async function rerenderAllSpans(){
   // regenerate every span from stored source (deterministic, spec §3.5.5)
   const w = omniPack() ? await ensureOmni() : null;
+  // a codex is installed but its engine did not wake: leave every span exactly
+  // as it is. Rewriting through the sample cipher would destroy the real
+  // romanization and drop data-omni, making the damage unrecoverable.
+  if(omniPack() && !w) return;
   const redo = doc => {
     if(!doc || doc.indexOf('tspan') === -1) return doc;
     const tpl = document.createElement('template');
@@ -4867,10 +4927,15 @@ function offerRestore(text){
       state.codex = state.codex || null;
       // omni-host packs carry no languages[] — same exemption as the boot guard
       if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null;
-      if(data.codexEngine && state.codex && state.codex.kind === 'omni-host'){
-        omniTeardown();
+      omniTeardown(); // never keep a previously-mounted engine across a restore
+      if(data.codexEngine && state.codex && state.codex.kind === 'omni-host' && !state.codex.embedded){
         window.__codexEngineHTML = data.codexEngine;
         kvSet('codexEngine', data.codexEngine);
+      }else if(!state.codex || (state.codex.kind === 'omni-host' && !state.codex.embedded)){
+        // no codex, or one whose engine cannot be revived: fall back to the
+        // codex embedded in this file — never to the sample cipher
+        kvSet('codexEngine', null);
+        state.codex = embeddedCodexPack() || state.codex;
       }
       lastLangId = null;
       flushSave();
