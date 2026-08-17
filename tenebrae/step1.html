@@ -470,16 +470,31 @@ input{font:inherit;color:inherit;background:none;border:0}
   font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
 }
 
-/* ---------- desktop (Chrome-friendly testing frame) ---------- */
+/* ---------- desktop: full-screen canvas, readable centered column ---------- */
 @media (min-width: 700px){
-  :root{ --deskw: 442px; --deske: calc(50vw - var(--deskw) / 2); }
+  :root{
+    --deskw: min(1200px, 100vw - 48px);           /* the app fills the screen */
+    --deske: calc(50vw - var(--deskw) / 2);
+    --deskcol: 720px;                              /* prose + lists stay readable */
+  }
   body{ background:#E8E1D2; }
   #app{
     left:var(--deske); right:auto; width:var(--deskw);
     box-shadow:0 0 0 .5px var(--hair), 0 24px 70px rgba(28,22,14,.22);
   }
-  #sheet{ left:var(--deske); right:var(--deske); }
-  #fbar{ left:var(--deske); right:var(--deske); }
+  /* every screen's content rides a centered column inside the wide frame */
+  .scroll > *{ max-width:var(--deskcol); margin-left:auto; margin-right:auto; }
+  #ed-content{ font-size:19px; }
+  /* sheets float as centered cards instead of stretching the full width */
+  #sheet{
+    left:max(var(--deske), calc(50vw - 260px));
+    right:max(var(--deske), calc(50vw - 260px));
+    border-radius:18px; bottom:18px;
+  }
+  #fbar{
+    left:max(var(--deske), calc(50vw - 300px));
+    right:max(var(--deske), calc(50vw - 300px));
+  }
   #zen-exit{ right:calc(var(--deske) + 14px); }
   .scroll{ scrollbar-width:thin; scrollbar-color:var(--hair) transparent; }
   .scroll::-webkit-scrollbar{ width:9px }
