@@ -3316,6 +3316,28 @@ function edApplyText(range, text){
   sel.addRange(range);
   return text ? document.execCommand('insertText', false, text) : document.execCommand('delete', false);
 }
+// contenteditable turns the pad we insert next to a span into an NBSP and can
+// leave it behind when the span goes. Any NBSP that is NOT the pad of a
+// surviving span is prose whitespace, so restore it to a normal space.
+function normalizeSpacing(block){
+  if(!block) return;
+  const w = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  let n;
+  while((n = w.nextNode())) if(n.nodeValue.indexOf('\u00A0') > -1) hits.push(n);
+  for(const t of hits){
+    const padOfSpan = t.previousSibling && t.previousSibling.nodeType === 1 &&
+                      t.previousSibling.classList && t.previousSibling.classList.contains('tspan');
+    t.nodeValue = padOfSpan
+      ? t.nodeValue.replace(/\u00A0(?!$)/g, ' ').replace(/^\u00A0\u00A0+/, '\u00A0') // keep one pad
+      : t.nodeValue.replace(/\u00A0/g, ' ');
+  }
+}
+function blockOf(el){
+  let n = el;
+  while(n && n !== edContent && !/^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName)) n = n.parentNode;
+  return (n && n !== edContent) ? n : edContent;
+}
 function rangeAround(el, absorbPad){
   const r = document.createRange();
   r.selectNode(el);
@@ -3407,15 +3429,19 @@ function tspanSheet(el){
         catch(e){ toast('Couldn\u2019t copy'); }
       } },
     { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
+        const blk = blockOf(el);
         let ok = false;
         try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), src); }catch(e){}
         if(!ok) el.replaceWith(document.createTextNode(src));
+        normalizeSpacing(blk);
         persistEditor(); updateCount(); toast('Back to the source line');
       } },
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
+        const blk = blockOf(el);
         let ok = false;
         try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), ''); }catch(e){}
         if(!ok) el.remove();
+        normalizeSpacing(blk);
         persistEditor(); updateCount(); syncEmpty();
       } }
     ]);

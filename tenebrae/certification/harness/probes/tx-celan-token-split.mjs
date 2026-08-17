@@ -41,11 +41,11 @@ const pageA = await browser.newPage();
 pageA.on('pageerror', e => console.log('CODEX PAGE EXCEPTION:', e.message));
 await pageA.goto('file://' + PATCHED);
 await pageA.waitForFunction(() => typeof window.translateE2C === 'function', null, { timeout: 40000 });
-const codexWords = await pageA.evaluate(inputs => inputs.map(s =>
+const codexWordsRendered = await pageA.evaluate(inputs => inputs.map(s =>
   window.translateE2C(String(s)).filter(p => p.cel && !p.drop).map(p => String(p.cel))), CORPUS);
-console.log('codex Celan words for "my mana let it stand as coa":', JSON.stringify(codexWords[1]));
-ck('codex emits at least one word containing an interior space', codexWords.some(ws => ws.some(w => /\S\s\S/.test(w))),
-   JSON.stringify(codexWords.flat().filter(w => /\S\s\S/.test(w)).slice(0, 4)));
+console.log('codex Celan words for "my mana let it stand as coa":', JSON.stringify(codexWordsRendered[1]));
+ck('codex compiler emits at least one part containing an interior space', codexWordsRendered.some(ws => ws.some(w => /\S\s\S/.test(w))),
+   JSON.stringify(codexWordsRendered.flat().filter(w => /\S\s\S/.test(w)).slice(0, 4)));
 
 // ---- 2. the writer's token stream for the same inputs ----
 const srv = await startServer();
@@ -66,7 +66,10 @@ const writerToks = await page.evaluate(async inputs => {
 
 let lossy = 0;
 for (let i = 0; i < CORPUS.length; i++) {
-  const want = codexWords[i], got = writerToks[i].toks.map(t => t.t + t.p);
+  // transcribeScriptHTML/SVG split the romanization on whitespace before
+  // drawing, so a compiler part holding "na mé" is TWO rendered words
+  const want = codexWordsRendered[i].flatMap(x => String(x).split(/\s+/).filter(Boolean));
+  const got = writerToks[i].toks.map(t => t.t + t.p);
   const same = JSON.stringify(want) === JSON.stringify(got);
   if (!same) { lossy++; console.log(`  DIVERGES ${JSON.stringify(CORPUS[i])}\n     codex words : ${JSON.stringify(want)}\n     writer toks : ${JSON.stringify(got)}`); }
   // romanization stays correct in every case
@@ -74,7 +77,7 @@ for (let i = 0; i < CORPUS.length; i++) {
 }
 console.log(`token divergence: ${lossy}/${CORPUS.length} inputs`);
 ck('romanization is correct on every input (the defect is token-only)',
-   CORPUS.every((_, i) => writerToks[i].rom === codexWords[i].join(' ')));
+   CORPUS.every((_, i) => writerToks[i].rom === codexWordsRendered[i].join(' ')));
 ck('Celan Basic token stream equals the codex word list on every input', lossy === 0, `${lossy}/${CORPUS.length} inputs corrupted`);
 
 // ---- 3. does it reach the UI? "Preview a Phrase" renders from r.toks ----
@@ -102,7 +105,10 @@ const codexPreview = await pageA.evaluate(() =>
 const codexPreviewWords = codexPreview.map(p => p.cel);
 // tokens the codex marks unknown are deliberately shown as Latin (.tn-unk), so
 // the rune-rendered set is exactly the KNOWN codex words
-const codexKnown = codexPreview.filter(p => !p.unknown).map(p => p.cel);
+// rendered units again: split each known part on whitespace, the way the
+// codex's own transcribers do before drawing each word
+const codexKnown = codexPreview.filter(p => !p.unknown)
+  .flatMap(p => String(p.cel).split(/\s+/).filter(Boolean));
 console.log('codex words for the same phrase:', JSON.stringify(codexPreviewWords), 'known:', JSON.stringify(codexKnown));
 ck('rune-rendered words in the real UI match the codex\'s known words',
    !!preview && JSON.stringify(preview.titles) === JSON.stringify(codexKnown),
