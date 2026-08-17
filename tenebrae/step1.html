@@ -2416,8 +2416,9 @@ blockquote{margin:1em 2em;font-style:italic}
 .sc{font-variant:small-caps}
 .tspan{font-style:normal}
 .tspan[dir="rtl"]{unicode-bidi:isolate}
-.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}
-.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`;
+.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}
+.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:13em;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`;
 function epubFontEntries(){
   // every script font the book's spans could need: the sample TTFs, fonts from
   // an imported JSON pack, and the fonts forged from an imported codex
@@ -2714,12 +2715,17 @@ function forgeOmniFonts(w){
       glyphs.push({ contours: forgeGlyphContours(g.d, tf), advance: vertical ? 1000 : 700 });
       pairs.push([base + i, i + 2]);
     });
+    // unknown-token mark: a dot inside the glyph box, so it holds the column /
+    // rail geometry instead of falling back to a Latin middle-dot
+    const dotCode = base + sc.glyphs.length;
+    glyphs.push({ contours: forgeGlyphContours('M50 50 L50 50', tf), advance: vertical ? 1000 : 700 });
+    pairs.push([dotCode, sc.glyphs.length + 2]);
     const family = `Tenebrae Omni ${T.L.name || langId}`;
     const ttf = forgeTTF(family, glyphs, pairs);
     const matcher = C.makeMatcher(sc);
     const gidx = {};
     sc.glyphs.forEach((g, i) => gidx[g.k.toLowerCase()] = i);
-    omniForged[langId] = { family, base, flow, ttf, matcher, gidx };
+    omniForged[langId] = { family, base, flow, ttf, matcher, gidx, dot: String.fromCharCode(dotCode) };
     try{
       const face = new FontFace(family, ttf.buffer.slice(ttf.byteOffset, ttf.byteOffset + ttf.byteLength));
       face.load().then(f => document.fonts.add(f)).catch(() => {});
@@ -2730,29 +2736,31 @@ function forgeOmniFonts(w){
 }
 /* romanization -> script text: PUA glyph runs, canonical ordering built in */
 function omniScriptText(langId, toks){
+  // The string stays in LOGICAL order (so copy, search, export and round-trip
+  // all stay sane); CSS turns it into the codex's canonical visual layout:
+  //   cols-rtl  - vertical-rl: letters down a column, columns right->left
+  //   btt-stave - vertical-lr + direction:rtl: letters bottom-up, one stave per
+  //               word, staves left->right, all standing on common ground
+  //   rtl       - direction:rtl + bidi-override: letters and words right->left
   const f = omniForged && omniForged[langId];
   if(!f) return null;
-  const words = [];
-  let cur = [];
-  for(const tk of toks){
-    if(tk.sep){ if(cur.length){ words.push(cur); cur = []; } continue; }
-    if(!tk.t) continue;
-    cur.push(tk);
-  }
-  if(cur.length) words.push(cur);
-  const wordStr = wtoks => wtoks.map(tk => {
-    let s = '';
-    for(const m of omniMatchWord(tk.t, f.matcher)){
-      if(m.g && f.gidx[m.g.k.toLowerCase()] != null) s += String.fromCharCode(f.base + f.gidx[m.g.k.toLowerCase()]);
-      else if(/\S/.test(m.t)) s += '·';
+  const wordStr = t => {
+    let out = '';
+    for(const m of omniMatchWord(t, f.matcher)){
+      const k = m.g && m.g.k.toLowerCase();
+      if(k && f.gidx[k] != null) out += String.fromCharCode(f.base + f.gidx[k]);
+      else if(/\S/.test(m.t)) out += f.dot;
     }
-    return s;
-  }).join('');
-  let strs = words.map(wordStr).filter(Boolean);
-  if(f.flow === 'rtl'){ strs = strs.map(s => [...s].reverse().join('')).reverse(); } // PUA is strong-LTR: bake canonical order in
-  if(f.flow === 'btt-stave'){ strs = strs.map(s => [...s].reverse().join('')); }    // first letter at the BOTTOM of the stave
-  const vertical = f.flow === 'cols-rtl' || f.flow === 'btt-stave';
-  return strs.join(vertical ? '\n' : ' '); // one column per word in vertical flows
+    return out;
+  };
+  const words = [];
+  for(const tk of toks){
+    if(tk.sep || !tk.t) continue;
+    const w = wordStr(tk.t);
+    if(w) words.push(w);
+  }
+  if(!words.length) return null;
+  return words.join(f.flow === 'btt-stave' ? '\n' : ' '); // one stave per word
 }
 function omniScriptCSS(){
   let style = $('#omni-style');
@@ -2770,8 +2778,9 @@ function omniScriptCSS(){
     }
     rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
   }
-  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`);
-  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;white-space:pre-line;line-height:1.05;vertical-align:middle;letter-spacing:0}`);
+  rules.push(`.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}`);
+  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:13em;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
   style.textContent = rules.join('\n');
 }
 
@@ -3124,7 +3133,7 @@ function decorateAll(root){
       const scr = omniScriptFor(r, w);
       if(scr){
         sp.dataset.scr = scr;
-        if(r.flow && r.flow !== 'ltr' && r.flow !== 'rtl') sp.dataset.flow = r.flow;
+        if(r.flow && r.flow !== 'ltr') sp.dataset.flow = r.flow;
         sp.textContent = scr;
       }
     });
@@ -3176,7 +3185,7 @@ function spanFromResult(r, src, w){
     const scr = omniScriptFor(r, w); // w may be null — sample-script fallback still applies
     if(scr){
       el.dataset.scr = scr;
-      if(r.flow && r.flow !== 'ltr' && r.flow !== 'rtl') el.dataset.flow = r.flow;
+      if(r.flow && r.flow !== 'ltr') el.dataset.flow = r.flow;
       el.textContent = scr;
     }else el.textContent = r.romanization; // upgraded to script by decorateAll once the engine wakes
   }else el.textContent = r.rendered;
@@ -3315,9 +3324,9 @@ function tspanSheet(el){
     if(!r){ toast('That tongue is not in this codex'); return; }
     const dirAttr = r.dir === 'rtl' ? ' dir="rtl"' : '';
     const omniScr = r.omni ? omniScriptFor(r, omniWin) : null;
-    const flowAttr = r.omni && r.flow && r.flow !== 'ltr' && r.flow !== 'rtl' ? ` data-flow="${esc(r.flow)}"` : '';
+    const flowAttr = r.omni && r.flow && r.flow !== 'ltr' ? ` data-flow="${esc(r.flow)}"` : '';
     const bigRender = r.omni
-      ? `<div class="tsr"${dirAttr}><span class="tspan" data-lang="${esc(r.lang.id)}"${flowAttr} style="font-size:26px;line-height:1.2">${esc(omniScr || r.romanization)}</span></div>`
+      ? `<div class="tsr"${dirAttr}><span class="tspan" data-omni="1" data-lang="${esc(r.lang.id)}"${flowAttr}${dirAttr} style="font-size:26px;line-height:1.2">${esc(omniScr || r.romanization)}</span></div>`
       : `<div style="font-size:22px;line-height:1.5;margin:2px 0 10px"><span class="tspan" data-lang="${esc(r.lang.id)}"${dirAttr}>${esc(r.rendered)}</span></div>`;
     const scriptLine = r.omni && r.script ? `<div class="ts-rom" style="opacity:.7">${esc(r.script)}${r.flow && r.flow !== 'ltr' ? ' \u00b7 ' + esc(r.flow) : ''}</div>` : '';
     actionSheet(r.lang.name, [
@@ -3597,11 +3606,13 @@ function codexSheet(){
         const out = Object.assign({}, codex);
         download(fileSafe(codex.name || 'codex-pack') + '.json', JSON.stringify(out, null, 2), 'application/json');
       } },
-    ...(state.codex ? [{ label: 'Remove pack (use sample)', icon: ICONS.trash, destructive: true, onTap: () => {
-        confirmSheet('Remove the Codex Pack?', 'Spans keep their source text and re-render with the sample tongues until a pack is imported again.', 'Remove Pack', () => {
-          state.codex = null; lastLangId = null;
+    ...(state.codex ? [{ label: 'Remove pack', icon: ICONS.trash, destructive: true, onTap: () => {
+        confirmSheet('Remove the Codex Pack?', 'Spans keep their source text and re-render with the built-in Codex Omnilingua.', 'Remove Pack', () => {
+          // fall back to the codex embedded in the app, never the sample cipher
+          state.codex = embeddedCodexPack(); lastLangId = null;
           scheduleSave(); registerCodexFonts();
-          rerenderAllSpans().then(() => toast('Back to the sample codex'));
+          if(omniPack()) ensureOmni().then(w => { if(w) forgeOmniFonts(w); });
+          rerenderAllSpans().then(() => toast(state.codex ? 'Back to the built-in Codex Omnilingua' : 'Back to the sample codex'));
         });
       } }] : []),
     { note: 'A pack is JSON — { name, version, languages:[{ id, name, fontFamily, dir, shift:[[from,to]…], affix:{plural,past,prog}, script:{base:0xE___, digraphs:{…}} }], lexicon:{ lemma: root | { root, per-language } } } — or a ZIP holding codex.json plus .ttf/.woff2 fonts. With script, spans render as PUA glyphs from your fonts (works in every renderer); without it, spans carry romanization for fonts that shape Latin themselves. Offline, deterministic, never Claude.' }
@@ -3621,6 +3632,11 @@ try{
     wordSVG: (langId, word, size, color) => ensureOmni().then(w => w ? omniWordSVG(w, langId, word, size || 100, color || '#000') : null),
     engine: () => ensureOmni(),
     codex: () => state.codex || SAMPLE_CODEX, // the ACTIVE pack (codexActive() is the sample-engine accessor)
+    // read-only forge seam for render-parity verification
+    _forge: { map: () => omniForged,
+              textFor: (langId, word) => omniScriptText(langId, [{ t: String(word) }]),
+              textForToks: (langId, toks) => omniScriptText(langId, toks || []),
+              fontBytes: langId => (omniForged && omniForged[langId]) ? omniForged[langId].ttf : null },
     _omni: { setPack: p => { state.codex = p; omniTeardown(); if(p) state.lastLang = 'celan_basic'; },
              decorate: el => decorateAll(el),
              translateWith: (w, l, t) => omniTranslate(w, l, t),

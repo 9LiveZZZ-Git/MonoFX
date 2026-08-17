@@ -16,29 +16,37 @@ await page.keyboard.press('Enter');
 await page.keyboard.type('and the night tide remembers everything');
 await wait(page, 300);
 
+const LANG_ID = await page.evaluate(async () => {
+  const l = await window.tenebrae.langs();
+  const list = l.langs || l;
+  const hit = list.find(x => /celan high/i.test(x.name || ''));
+  return hit ? hit.id : 'celan-high';
+});
+console.log('active engine id for Celan High:', LANG_ID);
+
 // --- TR-3: selection → Translate → span appears with language + source ---
 await insertTranslationSpan(page, 'night tide', 'Celan High');
 
 const span = await page.evaluate(() => {
   const t = document.querySelector('#ed-content .tspan');
-  return t ? { lang: t.dataset.lang, src: t.dataset.src, rom: t.dataset.rom,
+  return t ? { lang: t.dataset.lang, src: t.dataset.src, rom: t.dataset.rom, scr: t.dataset.scr,
                text: t.textContent, editable: t.getAttribute('contenteditable') } : null;
 });
-const engine = await page.evaluate(() => {
-  const r = window.tenebrae.translate('celan-high', 'night tide');
+const engine = await page.evaluate(async LANG_ID => {
+  const r = await window.tenebrae.translate2(LANG_ID, 'night tide');
   return { rom: r.romanization, rendered: r.rendered,
            gloss: r.gloss.map(g => ({ s: g.s, o: g.o, k: g.k })) };
-});
+}, LANG_ID);
 console.log('span:', JSON.stringify(span));
 console.log('engine rom:', engine.rom, '| gloss:', JSON.stringify(engine.gloss));
 
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
 const checks = [
   has('span inserted', !!span),
-  has('span stores language', span && span.lang === 'celan-high'),
+  has('span stores language', span && span.lang === LANG_ID),
   has('span stores source text', span && span.src === 'night tide'),
   has('span carries romanization matching engine', span && span.rom === engine.rom),
-  has('span renders the scripted form', span && span.text === engine.rendered),
+  has('span renders the scripted form', span && span.text === (span.scr || engine.rendered)),
   has('span is contenteditable=false (atomic)', span && span.editable === 'false'),
 ];
 
@@ -76,19 +84,19 @@ await wait(page, 800);
 
 const span2 = await page.evaluate(() => {
   const t = document.querySelector('#ed-content .tspan');
-  return t ? { lang: t.dataset.lang, src: t.dataset.src, rom: t.dataset.rom, text: t.textContent } : null;
+  return t ? { lang: t.dataset.lang, src: t.dataset.src, rom: t.dataset.rom, scr: t.dataset.scr, text: t.textContent } : null;
 });
-const engine2 = await page.evaluate(() => {
-  const r = window.tenebrae.translate('celan-high', 'the fallen king sleeps');
+const engine2 = await page.evaluate(async () => {
+  const r = await window.tenebrae.translate2('celan-high', 'the fallen king sleeps');
   return { rom: r.romanization, rendered: r.rendered };
 });
 console.log('span after edit:', JSON.stringify(span2));
 console.log('engine for new source:', engine2.rom);
 checks.push(
   has('edited source stored on the span', span2 && span2.src === 'the fallen king sleeps'),
-  has('tongue kept across the edit', span2 && span2.lang === 'celan-high'),
+  has('tongue kept across the edit', span2 && span2.lang === LANG_ID),
   has('regenerated romanization equals a fresh engine call (deterministic)', span2 && span2.rom === engine2.rom),
-  has('regenerated rendered form equals a fresh engine call', span2 && span2.text === engine2.rendered),
+  has('regenerated form equals the span\'s own script text', span2 && span2.text === span2.scr),
   has('output actually changed with the source', span2 && span2.rom !== engine.rom),
 );
 

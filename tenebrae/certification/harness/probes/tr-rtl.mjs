@@ -15,7 +15,7 @@ await page.keyboard.type('the stone gate holds and the deep water waits');
 await wait(page, 300);
 
 await insertTranslationSpan(page, 'stone gate holds', 'Kerrackian');
-await insertTranslationSpan(page, 'deep water waits', 'Kildaren');
+await insertTranslationSpan(page, 'deep water waits', 'Calgridarian'); // horizontal LTR control
 
 const spans = await page.evaluate(() => {
   return [...document.querySelectorAll('#ed-content .tspan')].map(t => {
@@ -27,7 +27,7 @@ const spans = await page.evaluate(() => {
 });
 console.log('spans:', JSON.stringify(spans, null, 1));
 const ker = spans.find(s => s.lang === 'kerrackian');
-const kil = spans.find(s => s.lang === 'kildaren');
+const kil = spans.find(s => s.lang === 'calgridarian');
 const engineDir = await page.evaluate(() => window.tenebrae.translate('kerrackian', 'stone gate holds').dir);
 console.log('engine dir for kerrackian:', engineDir);
 
@@ -38,7 +38,7 @@ const checks = [
   has('kerrackian span carries dir="rtl"', ker && ker.dirAttr === 'rtl'),
   has('computed direction is rtl', ker && ker.direction === 'rtl'),
   has('bidi isolation on the span (unicode-bidi: isolate)', ker && /isolate/.test(ker.unicodeBidi)),
-  has('LTR control span (kildaren) has no dir="rtl"', kil && kil.dirAttr !== 'rtl' && kil.direction === 'ltr'),
+  has('LTR control span (calgridarian) has no dir="rtl"', kil && kil.dirAttr !== 'rtl' && kil.direction === 'ltr'),
 ];
 
 // dir survives persistence: reload and re-check the attribute
