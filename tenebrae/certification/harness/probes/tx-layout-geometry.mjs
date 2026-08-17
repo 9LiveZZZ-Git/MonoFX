@@ -249,7 +249,11 @@ const gt = await page.evaluate(async rows => {
     // nested inside it, so parse rather than count substrings
     const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
     const units = [...doc.documentElement.children].filter(n => n.tagName === 'g').length;
-    return { id, token, codexUnits: units, writerUnits: 1 };
+    // MEASURE the writer rather than assume it: its script run separates word
+    // units with a space (or a newline for one-stave-per-word flows)
+    const run = window.tenebrae._forge.textForToks(id, [{ t: token }]) || '';
+    const writerUnits = run.split(/[\n ]+/).filter(Boolean).length;
+    return { id, token, codexUnits: units, writerUnits };
   });
 }, fused.map(f => ({ id: f.id, token: f.token })));
 for(const g of gt) console.log(`  ${g.id.padEnd(14)} ${JSON.stringify(g.token)}: codex draws ${g.codexUnits} word units, writer renders ${g.writerUnits}`);

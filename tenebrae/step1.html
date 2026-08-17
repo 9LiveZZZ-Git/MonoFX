@@ -1043,6 +1043,8 @@ function sanitizeHTML(html){
           t.dataset.rom = String(child.dataset.rom || '').slice(0, 4000);
           if(child.dataset.scr) t.dataset.scr = String(child.dataset.scr).slice(0, 4000);
           if(child.dataset.flow) t.dataset.flow = String(child.dataset.flow).replace(/[^a-z-]/g, '').slice(0, 16);
+          if(/^(s|l|xl)$/.test(child.dataset.size || '')) t.dataset.size = child.dataset.size;
+          if(child.dataset.block === '1') t.dataset.block = '1';
           if(child.dataset.omni) t.dataset.omni = '1';
           if(child.getAttribute('dir') === 'rtl') t.setAttribute('dir', 'rtl');
           t.setAttribute('contenteditable', 'false');
@@ -2351,6 +2353,8 @@ function epubSceneInto(d, body, sceneDoc){
         if(c.dataset.src) s.setAttribute('data-src', c.dataset.src);
         if(c.dataset.rom) s.setAttribute('data-rom', c.dataset.rom);
         if(c.dataset.flow) s.setAttribute('data-flow', c.dataset.flow);
+        if(c.dataset.size) s.setAttribute('data-size', c.dataset.size);
+        if(c.dataset.block) s.setAttribute('data-block', c.dataset.block);
         if(c.getAttribute('dir') === 'rtl') s.setAttribute('dir', 'rtl');
         // the script itself travels as TEXT — the EPUB embeds the script fonts;
         // romanization rides along as metadata for readers without them
@@ -2417,7 +2421,11 @@ function epubNavXHTML(chapters){
     body.appendChild(nav);
   });
 }
-const EPUB_CSS = `body{font-family:Georgia,'Iowan Old Style',serif;line-height:1.6;margin:1em auto;max-width:36em;padding:0 1em}
+const EPUB_CSS = `.tspan[data-size="s"]{font-size:.9em}
+.tspan[data-size="l"]{font-size:1.6em}
+.tspan[data-size="xl"]{font-size:2.3em}
+.tspan[data-block="1"]{display:block;width:fit-content;max-width:100%;margin:.7em 0}
+body{font-family:Georgia,'Iowan Old Style',serif;line-height:1.6;margin:1em auto;max-width:36em;padding:0 1em}
 h1,h2,h3,h4{font-weight:700;line-height:1.25}
 blockquote{margin:1em 2em;font-style:italic}
 .ast{text-align:center;letter-spacing:.3em;margin:1.6em 0}
@@ -2425,8 +2433,15 @@ blockquote{margin:1em 2em;font-style:italic}
 .tspan{font-style:normal}
 .tspan[dir="rtl"]{unicode-bidi:isolate}
 .tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}
-.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:13em;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
-.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`;
+.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:var(--tsrun,13em);line-height:1.12;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.6;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+/* script size + full-width, author-controlled from the span sheet */
+.tspan[data-size="s"]{font-size:.9em}
+.tspan[data-size="l"]{font-size:1.6em}
+.tspan[data-size="xl"]{font-size:2.3em}
+.tspan[data-block="1"]{display:block;width:fit-content;max-width:100%;margin:.7em 0;vertical-align:baseline}
+.tspan[data-block="1"][data-flow="btt-stave"]{width:100%}
+.tspan[data-block="1"][data-flow="cols-rtl"]{--tsrun:9em}`;
 function epubFontEntries(){
   // every script font the book's spans could need: the sample TTFs, fonts from
   // an imported JSON pack, and the fonts forged from an imported codex
@@ -2769,8 +2784,13 @@ function omniScriptText(langId, toks){
   const words = [];
   for(const tk of toks){
     if(tk.sep || !tk.t) continue;
-    const w = wordStr(tk.t);
-    if(w) words.push(w);
+    // the codex's own transcribers split the romanization on whitespace before
+    // drawing a word, so a compiler token holding two words is two word units
+    for(const part of String(tk.t).split(/\s+/)){
+      if(!part) continue;
+      const w = wordStr(part);
+      if(w) words.push(w);
+    }
   }
   if(!words.length) return null;
   return words.join(f.flow === 'btt-stave' ? '\n' : ' '); // one stave per word
@@ -2792,8 +2812,9 @@ function omniScriptCSS(){
     rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
   }
   rules.push(`.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}`);
-  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:13em;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
-  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-rl;writing-mode:vertical-rl;text-orientation:upright;white-space:normal;max-height:var(--tsrun,13em);line-height:1.12;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.6;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  rules.push(`.tspan[data-size="s"]{font-size:.9em}.tspan[data-size="l"]{font-size:1.6em}.tspan[data-size="xl"]{font-size:2.3em}.tspan[data-block="1"]{display:block;width:100%;margin:.7em 0;vertical-align:baseline}.tspan[data-block="1"][data-flow="cols-rtl"]{--tsrun:9em}`);
   style.textContent = rules.join('\n');
 }
 
@@ -3423,6 +3444,23 @@ function tspanSheet(el){
             onTap: () => { retranslateSpan(el, l.id, null).then(() => persistEditor()); }
           })));
         });
+      } },
+    { label: `Script size — ${({ s: 'Small', l: 'Large', xl: 'Huge' })[el.dataset.size] || 'Normal'}`, icon: ICONS.rune, onTap: () => {
+        const order = ['', 's', 'l', 'xl'];
+        actionSheet('Script Size', order.map(k => ({
+          label: ({ '': 'Normal', s: 'Small', l: 'Large', xl: 'Huge' })[k],
+          checked: (el.dataset.size || '') === k,
+          onTap: () => {
+            if(k) el.dataset.size = k; else delete el.dataset.size;
+            persistEditor(); toast('Script size set');
+          }
+        })));
+      } },
+    { label: el.dataset.block === '1' ? 'Full width — on' : 'Full width — off', icon: ICONS.para,
+      checked: el.dataset.block === '1', onTap: () => {
+        if(el.dataset.block === '1') delete el.dataset.block; else el.dataset.block = '1';
+        persistEditor();
+        toast(el.dataset.block === '1' ? 'Runs margin to margin' : 'Back inline with the prose');
       } },
     { label: 'Copy romanization', icon: ICONS.copy, onTap: () => {
         try{ navigator.clipboard.writeText(r.romanization); toast('Romanization copied'); }
