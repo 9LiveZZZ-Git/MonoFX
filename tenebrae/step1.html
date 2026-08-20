@@ -2198,6 +2198,12 @@ function exportSheet(scope){
         if(isBook) download(fileSafe(b.title) + '.docx', docxFile(b, 'book'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.docx', docxFile(b, 'scene', s), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); }
       } },
+    { label: 'Download PDF (.pdf)', icon: ICONS.book, onTap: () => {
+        try{
+          if(isBook) download(fileSafe(b.title) + '.pdf', pdfFile(b, 'book'), 'application/pdf');
+          else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.pdf', pdfFile(b, 'scene', s), 'application/pdf'); }
+        }catch(e){ toast('Couldn\u2019t build the PDF'); }
+      } },
   );
   if(isBook){
     items.push(
@@ -2560,6 +2566,358 @@ function epubFile(book){
   return zipStore(entries);
 }
 
+/* ================= PDF export =================
+   A real PDF, written by hand: no library, no network, deterministic bytes.
+   English prose rides the base-14 Times faces, which every reader already has,
+   so nothing is embedded for it. Every Tenebrae span rides the forged TTF for
+   its tongue, embedded as a CIDFontType2 with Identity-H encoding — glyph ids
+   written straight into the page. That is the whole point of the format here:
+   DOCX asks Word to honour an embedded font and EPUB asks the reader to, and
+   both can decline. A PDF carries the outlines and the positions itself, so
+   the script looks the same everywhere, on screen and on paper.
+*/
+const PDF_PAGE = { w: 595.28, h: 841.89, m: 72 };   // A4, 1in margins — matches the .docx
+const PDF_BODY = 11, PDF_LEAD = 15.5;
+// CP1252 = WinAnsiEncoding: the base-14 fonts' byte space. Everything outside
+// it (the asterism, the script's PUA) is handled explicitly, never guessed.
+const PDF_WIN_HI = { 0x20AC:0x80,0x201A:0x82,0x0192:0x83,0x201E:0x84,0x2026:0x85,0x2020:0x86,0x2021:0x87,
+  0x02C6:0x88,0x2030:0x89,0x0160:0x8A,0x2039:0x8B,0x0152:0x8C,0x017D:0x8E,0x2018:0x91,0x2019:0x92,
+  0x201C:0x93,0x201D:0x94,0x2022:0x95,0x2013:0x96,0x2014:0x97,0x02DC:0x98,0x2122:0x99,0x0161:0x9A,
+  0x203A:0x9B,0x0153:0x9C,0x017E:0x9E,0x0178:0x9F };
+function pdfWinAnsi(str){
+  const out = [];
+  for(const ch of String(str)){
+    const n = ch.codePointAt(0);
+    if(n === 9) { out.push(32); continue; }
+    if(n >= 32 && n <= 126) out.push(n);
+    else if(PDF_WIN_HI[n] != null) out.push(PDF_WIN_HI[n]);
+    else if(n === 0xA0) out.push(32);
+    else if(n >= 0xA1 && n <= 0xFF) out.push(n);
+    else out.push(63); // '?' — never silently drop a character
+  }
+  return out;
+}
+function pdfLiteral(str){
+  let s = '';
+  for(const b of pdfWinAnsi(str)){
+    if(b === 40 || b === 41 || b === 92) s += '\\' + String.fromCharCode(b);
+    else if(b < 32 || b > 126) s += '\\' + ('00' + b.toString(8)).slice(-3);
+    else s += String.fromCharCode(b);
+  }
+  return '(' + s + ')';
+}
+const pdfHex = codes => '<' + codes.map(c => ('000' + c.toString(16)).slice(-4)).join('') + '>';
+
+/* ---- Latin metrics ----
+   Line breaking needs the width the READER will use. Times New Roman, Liberation
+   Serif and Nimbus Roman are all metric-compatible with the base-14 Times, so a
+   canvas measurement in that stack matches the PDF to well under a percent; the
+   column is used at 97% to swallow the remainder. */
+let pdfCanvas = null;
+function pdfTextWidth(str, size, bold, italic){
+  if(!pdfCanvas) pdfCanvas = document.createElement('canvas').getContext('2d');
+  pdfCanvas.font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${size}px 'Times New Roman','Liberation Serif','Nimbus Roman',Times,serif`;
+  return pdfCanvas.measureText(str).width;
+}
+
+/* ---- a scene doc becomes blocks of runs ---- */
+function pdfRunsFrom(node, m, out){
+  node.childNodes.forEach(c => {
+    if(c.nodeType === 3){ if(c.nodeValue) out.push(Object.assign({ k: 't', s: c.nodeValue }, m)); return; }
+    if(c.nodeType !== 1) return;
+    const tag = c.tagName;
+    if(tag === 'BR'){ out.push({ k: 'br' }); return; }
+    if(tag === 'SPAN' && c.classList.contains('tspan')){
+      const f = omniForged && omniForged[c.dataset.lang];
+      const scr = c.dataset.scr || '';
+      // no forged face, or nothing written: fall back to the romanization so a
+      // reader still gets the line rather than a hole in the page
+      if(!f || !f.codeMap || !scr) out.push(Object.assign({ k: 't', s: c.dataset.rom || c.textContent }, m, { i: true }));
+      else out.push({ k: 's', lang: c.dataset.lang, scr, flow: c.dataset.flow || 'ltr',
+                      scale: ({ s: 0.9, l: 1.6, xl: 2.3 })[c.dataset.size] || 1 });
+      return;
+    }
+    const m2 = Object.assign({}, m);
+    if(tag === 'B' || tag === 'STRONG') m2.b = true;
+    else if(tag === 'I' || tag === 'EM') m2.i = true;
+    else if(tag === 'U') m2.u = true;
+    else if(tag === 'SPAN' && (c.classList.contains('sc') || /small-caps/.test(c.getAttribute('style') || ''))) m2.sc = true;
+    pdfRunsFrom(c, m2, out);
+  });
+}
+function pdfBlocksFromDoc(doc){
+  const tpl = document.createElement('template');
+  tpl.innerHTML = syncScriptDoc(doc) || '';
+  const blocks = [];
+  const push = (kind, node, extra) => {
+    const runs = []; pdfRunsFrom(node, {}, runs);
+    if(runs.length) blocks.push(Object.assign({ kind, runs }, extra || {}));
+  };
+  tpl.content.childNodes.forEach(n => {
+    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) blocks.push({ kind: 'p', runs: [{ k: 't', s: t }] }); return; }
+    if(n.nodeType !== 1) return;
+    const tag = n.tagName;
+    if(tag === 'DIV' && n.classList.contains('asterism')){ blocks.push({ kind: 'ast', runs: [] }); return; }
+    if(tag === 'H2'){ push('h2', n); return; }
+    if(tag === 'H3'){ push('h3', n); return; }
+    if(tag === 'BLOCKQUOTE'){ push('q', n); return; }
+    if(tag === 'UL' || tag === 'OL'){
+      let i = 1;
+      n.querySelectorAll(':scope > li').forEach(li => push('li', li, { bullet: tag === 'UL' ? '•' : (i++) + '.' }));
+      return;
+    }
+    push('p', n);
+  });
+  return blocks;
+}
+
+/* ---- script run geometry, straight from the forged metrics ---- */
+function pdfScriptCells(run){
+  // -> { cells:[{gid,adv}], words:[[cell,...]] } ; adv in 1/1000 em
+  const f = omniForged[run.lang];
+  const words = [];
+  let cur = [];
+  for(const ch of run.scr){
+    const code = ch.charCodeAt(0);
+    if(ch === '\n' || ch === ' '){ if(cur.length){ words.push(cur); cur = []; } continue; }
+    const e = f.codeMap[code];
+    if(e) cur.push(e);
+  }
+  if(cur.length) words.push(cur);
+  return words;
+}
+function pdfScriptWidth(run, size){
+  const words = pdfScriptCells(run);
+  const s = size * run.scale;
+  if(run.flow === 'cols-rtl' || run.flow === 'btt-stave') return 0; // own block
+  const gap = s * 0.34; // the space between words
+  let w = 0;
+  words.forEach((wd, i) => { if(i) w += gap; wd.forEach(c => w += c.adv / 1000 * s); });
+  return w;
+}
+
+/* ---- byte buffer: PDF is a binary format with an offset table, so every
+       chunk is counted in bytes, never in characters ---- */
+function pdfBuf(){
+  const parts = []; let len = 0;
+  return {
+    get len(){ return len; },
+    str(s){ const b = new Uint8Array(s.length); for(let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 255; parts.push(b); len += b.length; },
+    bin(u8){ parts.push(u8); len += u8.length; },
+    done(){ const out = new Uint8Array(len); let o = 0; for(const p of parts){ out.set(p, o); o += p.length; } return out; }
+  };
+}
+const PDF_STYLE = {
+  p:  { size: PDF_BODY, lead: PDF_LEAD, indent: 0,  before: 0,  after: PDF_LEAD * 0.5 },
+  h2: { size: 15,   lead: 19,   indent: 0,  before: 14, after: 6,  b: true },
+  h3: { size: 12.5, lead: 17,   indent: 0,  before: 12, after: 5,  b: true, i: true },
+  q:  { size: 10.5, lead: 14.5, indent: 28, right: 28, before: 8, after: 8, i: true },
+  li: { size: PDF_BODY, lead: PDF_LEAD, indent: 20, before: 0, after: 2 },
+};
+function pdfFile(book, scope, scene){
+  const o = book.exportOpts || defaultExportOpts();
+  const P = PDF_PAGE;
+  const colW = P.w - P.m * 2;
+  const pages = [];
+  const used = {};                    // langId -> true, drives what gets embedded
+  let page = null, y = 0;
+  const newPage = () => { page = { ops: [] }; pages.push(page); y = P.h - P.m; };
+  const need = h => { if(y - h < P.m) newPage(); };
+  newPage();
+
+  const FKEY = m => (m.b && m.i) ? '/F4' : m.b ? '/F2' : m.i ? '/F3' : '/F1';
+  const textW = (s, size, m) => pdfTextWidth(m.sc ? s.toUpperCase() : s, m.sc ? size * 0.84 : size, m.b, m.i);
+  const drawText = (x, base, s, size, m) => {
+    const sz = m.sc ? size * 0.84 : size, str = m.sc ? s.toUpperCase() : s;
+    page.ops.push(`BT ${FKEY(m)} ${sz} Tf 1 0 0 1 ${x.toFixed(2)} ${base.toFixed(2)} Tm ${pdfLiteral(str)} Tj ET`);
+    if(m.u) page.ops.push(`${x.toFixed(2)} ${(base - sz * 0.11).toFixed(2)} ${textW(s, size, m).toFixed(2)} ${(sz * 0.04).toFixed(2)} re f`);
+  };
+  const drawGlyphs = (lang, cells, x, base, s) => {
+    used[lang] = true;
+    page.ops.push(`BT /S_${lang} ${s.toFixed(2)} Tf 1 0 0 1 ${x.toFixed(2)} ${base.toFixed(2)} Tm ${pdfHex(cells.map(c => c.gid))} Tj ET`);
+  };
+  // horizontal script run, inline with the prose
+  const drawScriptInline = (run, x, base, size) => {
+    const s = size * run.scale, words = pdfScriptCells(run), gap = s * 0.34;
+    let cx = x;
+    const seq = run.flow === 'rtl' ? words.slice().reverse() : words;
+    for(const wd of seq){
+      const cells = run.flow === 'rtl' ? wd.slice().reverse() : wd;
+      drawGlyphs(run.lang, cells, cx, base, s);
+      cells.forEach(c => cx += c.adv / 1000 * s);
+      cx += gap;
+    }
+  };
+  // vertical scripts get their own block: an inline column nine ems tall would
+  // wreck a printed page, and the codex sets them as blocks anyway
+  const scriptBlockSize = (run, size) => {
+    const s = size * run.scale, words = pdfScriptCells(run);
+    const pitch = (run.flow === 'btt-stave' ? 1.75 : 1.28) * s;
+    const deepest = Math.max(1, ...words.map(w => w.length));
+    return { s, words, pitch, w: words.length * pitch, h: deepest * s + s * 0.3 };
+  };
+  const drawScriptBlock = (run, x, top, size) => {
+    const { s, words, pitch } = scriptBlockSize(run, size);
+    const ground = top - Math.max(1, ...words.map(w => w.length)) * s;
+    words.forEach((wd, ci) => {
+      const cx = x + ci * pitch;
+      wd.forEach((cell, j) => {
+        // cols-rtl hangs from a common ceiling, btt-stave stands on common
+        // ground with the first letter lowest — the same two rules as on screen
+        const base = run.flow === 'btt-stave'
+          ? ground + j * s + s * 0.2
+          : top - (j + 1) * s + s * 0.2;
+        drawGlyphs(run.lang, [cell], cx, base, s);
+      });
+    });
+  };
+
+  /* ---- flow one block ---- */
+  const flow = blk => {
+    const st = PDF_STYLE[blk.kind] || PDF_STYLE.p;
+    if(blk.kind === 'ast'){
+      need(24);
+      y -= 10;
+      const w = pdfTextWidth('* * *', PDF_BODY, false, false);
+      drawText(P.m + (colW - w) / 2, y, '* * *', PDF_BODY, {});
+      y -= 20; return;
+    }
+    y -= st.before;
+    const left = P.m + (st.indent || 0), right = P.m + colW - (st.right || 0);
+    const avail = (right - left) * 0.97;   // the reader's Times is within a hair of ours
+    const mark = { b: !!st.b, i: !!st.i };
+    let atoms = [];
+    const flushLine = (isLast) => {
+      if(!atoms.length) return;
+      need(st.lead);
+      y -= st.lead;
+      if(pendingBullet){ drawText(P.m + 4, y, pendingBullet, st.size, {}); pendingBullet = null; }
+      let x = left;
+      for(const a of atoms){
+        if(a.k === 's') drawScriptInline(a.run, x, y, st.size);
+        else drawText(x, y, a.s, st.size, a.m);
+        x += a.w;
+      }
+      atoms = [];
+    };
+    const putAtom = a => {
+      const cur = atoms.reduce((n, z) => n + z.w, 0);
+      if(cur + a.w > avail && atoms.length){ flushLine(false); }
+      if(!atoms.length && a.k === 't' && /^\s+$/.test(a.s)) return; // no leading space
+      atoms.push(a);
+    };
+    let pendingBullet = blk.bullet || null;
+    for(const run of blk.runs){
+      if(run.k === 'br'){ flushLine(true); continue; }
+      if(run.k === 's'){
+        if(run.flow === 'cols-rtl' || run.flow === 'btt-stave'){
+          flushLine(true);
+          const box = scriptBlockSize(run, st.size);
+          need(box.h + 10);
+          y -= 8;
+          drawScriptBlock(run, left, y, st.size);
+          y -= box.h + 8;
+          continue;
+        }
+        // no synthetic space: placeTSpan already wrote the NBSP pad beside the
+        // span, and it arrives as a text run of its own
+        putAtom({ k: 's', run, w: pdfScriptWidth(run, st.size) });
+        continue;
+      }
+      const m = Object.assign({}, mark, run);
+      const parts = String(run.s).replace(/ /g, ' ').split(/(\s+)/).filter(x => x !== '');
+      for(const part of parts){
+        if(/^\s+$/.test(part)){ putAtom({ k: 't', s: ' ', m, w: pdfTextWidth(' ', st.size, m.b, m.i) }); continue; }
+        putAtom({ k: 't', s: part, m, w: textW(part, st.size, m) });
+      }
+    }
+    flushLine(true);
+    y -= st.after;
+  };
+
+  /* ---- the manuscript ---- */
+  const centred = (s, size, m) => {
+    need(size * 1.6); y -= size * 1.3;
+    drawText(P.m + (colW - pdfTextWidth(s, size, m.b, m.i)) / 2, y, s, size, m);
+    y -= size * 0.5;
+  };
+  if(scope === 'book'){
+    y -= 60;
+    centred(book.title, 24, { b: true });
+    y -= 24;
+    book.chapters.forEach((ch, ci) => {
+      const scenes = ch.scenes.filter(s => (s.doc && s.doc.trim()) || s.title);
+      if(!scenes.length && !ch.title) return;
+      if(ci > 0 || o.chapterTitles) newPage();          // chapters start a page
+      if(o.chapterTitles && ch.title) centred(ch.title, 16, { b: true });
+      scenes.forEach((s, i) => {
+        if(i > 0 && o.asterism) flow({ kind: 'ast', runs: [] });
+        if(o.sceneTitles && s.title) flow({ kind: 'h3', runs: [{ k: 't', s: s.title }] });
+        pdfBlocksFromDoc(s.doc).forEach(flow);
+      });
+    });
+  }else{
+    if(scene.title) centred(scene.title, 16, { b: true });
+    pdfBlocksFromDoc(scene.doc).forEach(flow);
+  }
+
+  /* ---- assemble ---- */
+  const objs = [];                       // 1-based; objs[i] = string | {bin}
+  const add = o2 => { objs.push(o2); return objs.length; };
+  const fontIds = {};
+  const baseFonts = ['Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic'];
+  const baseIds = baseFonts.map(n =>
+    add(`<< /Type /Font /Subtype /Type1 /BaseFont /${n} /Encoding /WinAnsiEncoding >>`));
+  for(const lang of Object.keys(used)){
+    const f = omniForged[lang];
+    const psName = f.family.replace(/[^A-Za-z0-9]/g, '');
+    const entries = Object.values(f.codeMap).sort((a, b) => a.gid - b.gid);
+    const W = [];
+    for(const e of entries) W.push(`${e.gid} [${e.adv}]`);
+    const fileId = add({ bin: f.ttf, dict: `<< /Length ${f.ttf.length} /Length1 ${f.ttf.length} >>` });
+    const descId = add(`<< /Type /FontDescriptor /FontName /${psName} /Flags 4 /FontBBox [-250 -300 1400 900] `
+      + `/ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 ${fileId} 0 R >>`);
+    const cidId = add(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${psName} `
+      + `/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> `
+      + `/FontDescriptor ${descId} 0 R /DW 1000 /W [${W.join(' ')}] /CIDToGIDMap /Identity >>`);
+    fontIds[lang] = add(`<< /Type /Font /Subtype /Type0 /BaseFont /${psName} /Encoding /Identity-H `
+      + `/DescendantFonts [${cidId} 0 R] >>`);
+  }
+  const fontRes = '/Font << ' + baseIds.map((id, i) => `/F${i + 1} ${id} 0 R`).join(' ')
+    + ' ' + Object.keys(fontIds).map(l => `/S_${l} ${fontIds[l]} 0 R`).join(' ') + ' >>';
+  const pagesId = add(null); // reserved: the page objects must name their parent
+  const kids = [];
+  for(const pg of pages){
+    const content = pg.ops.join('\n');
+    const cid = add(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    kids.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${P.w} ${P.h}] `
+      + `/Resources << ${fontRes} >> /Contents ${cid} 0 R >>`));
+  }
+  objs[pagesId - 1] = `<< /Type /Pages /Count ${kids.length} /Kids [${kids.map(k => k + ' 0 R').join(' ')}] >>`;
+  const catId = add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  // dates come from the book's own stamp — identical state, identical bytes
+  const d = new Date(book.updated || book.created || 0);
+  const two = n => ('0' + n).slice(-2);
+  const stamp = `D:${d.getUTCFullYear()}${two(d.getUTCMonth() + 1)}${two(d.getUTCDate())}${two(d.getUTCHours())}${two(d.getUTCMinutes())}${two(d.getUTCSeconds())}Z`;
+  const infoId = add(`<< /Title ${pdfLiteral(scope === 'book' ? book.title : (scene.title || book.title))} `
+    + `/Producer (Tenebrae Writer) /CreationDate (${stamp}) /ModDate (${stamp}) >>`);
+  const buf = pdfBuf();
+  buf.str('%PDF-1.7\n%\xE2\xE3\xCF\xD3\n');
+  const offsets = [0];
+  objs.forEach((ob, i) => {
+    offsets.push(buf.len);
+    buf.str(`${i + 1} 0 obj\n`);
+    if(typeof ob === 'string') buf.str(ob + '\n');
+    else { buf.str(ob.dict + '\nstream\n'); buf.bin(ob.bin); buf.str('\nendstream\n'); }
+    buf.str('endobj\n');
+  });
+  const xref = buf.len;
+  buf.str(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`);
+  for(let i = 1; i <= objs.length; i++) buf.str(('0000000000' + offsets[i]).slice(-10) + ' 00000 n \n');
+  buf.str(`trailer\n<< /Size ${objs.length + 1} /Root ${catId} 0 R /Info ${infoId} 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return buf.done();
+}
+
 /* ================= script font forge =================
    The imported codex describes each script as stroke-skeleton glyph paths
    (absolute M/L/C/Q/H/V on a 100-grid, stroke-width 8, round caps/joins —
@@ -2837,6 +3195,8 @@ function auricRebuild(){
     pairs.push([A.words[word].code, i + 2]);
   });
   A.ttf = forgeTTF(A.family, glyphs, pairs);
+  A.codeMap = { 0x20: { gid: 1, adv: 340 } };
+  A.order.forEach((word, i) => { A.codeMap[A.words[word].code] = { gid: i + 2, adv: A.words[word].glyph.advance }; });
   try{
     if(auricFace) document.fonts.delete(auricFace);
     auricFace = new FontFace(A.family, A.ttf.buffer.slice(A.ttf.byteOffset, A.ttf.byteOffset + A.ttf.byteLength));
@@ -2872,21 +3232,27 @@ function forgeOmniFonts(w){
       : (x, y) => [Math.round(70 + x * 6.44), Math.round(770 - y * 6.44)];
     const glyphs = [{ contours: [], advance: 1000 }, { contours: [], advance: 400 }]; // .notdef, space
     const pairs = [[0x20, 1]];
+    // code -> { gid, adv }: the PDF writer emits glyph ids straight into an
+    // Identity-H CID font, so it needs the same table the cmap is built from
+    const codeMap = { 0x20: { gid: 1, adv: 400 } };
     sc.glyphs.forEach((g, i) => {
-      glyphs.push({ contours: forgeGlyphContours(g.d, tf), advance: vertical ? 1000 : 700 });
+      const adv = vertical ? 1000 : 700;
+      glyphs.push({ contours: forgeGlyphContours(g.d, tf), advance: adv });
       pairs.push([base + i, i + 2]);
+      codeMap[base + i] = { gid: i + 2, adv };
     });
     // unknown-token mark: a dot inside the glyph box, so it holds the column /
     // rail geometry instead of falling back to a Latin middle-dot
     const dotCode = base + sc.glyphs.length;
     glyphs.push({ contours: forgeGlyphContours('M50 50 L50 50', tf), advance: vertical ? 1000 : 700 });
     pairs.push([dotCode, sc.glyphs.length + 2]);
+    codeMap[dotCode] = { gid: sc.glyphs.length + 2, adv: vertical ? 1000 : 700 };
     const family = `Tenebrae Omni ${T.L.name || langId}`;
     const ttf = forgeTTF(family, glyphs, pairs);
     const matcher = C.makeMatcher(sc);
     const gidx = {};
     sc.glyphs.forEach((g, i) => gidx[g.k.toLowerCase()] = i);
-    omniForged[langId] = { family, base, flow, ttf, matcher, gidx, dot: String.fromCharCode(dotCode) };
+    omniForged[langId] = { family, base, flow, ttf, matcher, gidx, codeMap, vertical, dot: String.fromCharCode(dotCode) };
     try{
       const face = new FontFace(family, ttf.buffer.slice(ttf.byteOffset, ttf.byteOffset + ttf.byteLength));
       face.load().then(f => document.fonts.add(f)).catch(() => {});
@@ -4030,6 +4396,12 @@ try{
     engine: () => ensureOmni(),
     codex: () => state.codex || SAMPLE_CODEX, // the ACTIVE pack (codexActive() is the sample-engine accessor)
     // read-only forge seam for render-parity verification
+    _pdf: (scope, sceneIdx) => {
+      const b = bookById(currentBookId);
+      if(!b) return null;
+      if(scope === 'scene'){ const sc = currentScene(); return sc ? pdfFile(b, 'scene', sc) : null; }
+      return pdfFile(b, 'book');
+    },
     _forge: { map: () => omniForged,
               textFor: (langId, word) => omniScriptText(langId, [{ t: String(word) }]),
               textForToks: (langId, toks) => omniScriptText(langId, toks || []),

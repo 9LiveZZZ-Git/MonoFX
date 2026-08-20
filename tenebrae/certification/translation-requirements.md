@@ -51,6 +51,15 @@ demonstrated against the running app.
   does the same: a word the lexicon could not render is **not** transliterated letter by
   letter into the script, and sentence punctuation is not written as a glyph. The full
   romanization (unknown words included) still lives in `data-rom` and the tap sheet.
+- **TX-6c** (F) **Celan Basic is a word script, and it is forged too.** The codex gives it
+  no alphabet in `TRANS[].L.script`; its Auric runes are carved per WORD by `composeWord` —
+  root rune, domain radical, a link stroke per extra root, a loan diamond for anything the
+  lexicon does not know, and prefix/suffix marks anchored to the whole word. The forge mints
+  a codepoint the first time a word is written and rebuilds the face. Geometry parity is
+  structural: one capsule per carver segment, each centred on that segment, every advance the
+  carver's own word width. Because this script has its own device for a borrowing, loans are
+  written here — the exception to TX-6b, which exists only because an alphabet has no way to
+  write a foreign word except letter-by-letter transliteration.
 
 ### The author's loop
 - **TX-7** (F) **Highlight → translate.** Selection to translated span works through the
@@ -68,6 +77,17 @@ demonstrated against the running app.
   `data-src`/`data-rom`/`data-flow`, embed and manifest every forged font used, and include
   `@font-face` plus per-language and per-flow CSS; every XHTML part is strict-XML valid;
   re-importing restores live spans with source intact.
+- **TX-10b** (F) **PDF carries the script, and cannot be talked out of it.** DOCX asks Word
+  to honour an embedded face and EPUB asks the reader to; both may decline. A PDF carries the
+  outlines and the positions itself. Every tongue on the page is embedded as a CIDFontType2
+  with `Identity-H` encoding and `CIDToGIDMap /Identity`; English prose rides the base-14
+  Times faces as real WinAnsi text. Proof is decoded, not eyeballed: every xref offset lands
+  on its object, every `FontFile2` decompiles under fontTools, and every glyph id in the
+  content stream maps — through the embedded font's OWN cmap — back to exactly the codepoints
+  the app shows on screen, in the order each flow requires (`rtl` reversed, the rest logical).
+  `cols-rtl` and `btt-stave` are set as their own blocks, keeping the common ceiling and the
+  common ground; an inline column nine ems tall would wreck a printed page. Byte-deterministic
+  for identical state.
 - **TX-11** (F) **Other formats stay legible.** DOCX/Markdown/plain text carry romanization
   (never raw PUA) and keep the English source recoverable. Markdown hides the source in a
   `<!--tenebrae:begin …-->` marker so it round-trips into a live span. Plain text and .docx

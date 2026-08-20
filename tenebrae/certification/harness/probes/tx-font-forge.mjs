@@ -46,10 +46,19 @@ const COLLECT = async (phrases) => {
     for(let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
     return btoa(s);
   };
+  // the Auric face is rebuilt as words are minted, and FontFace.load() is async
+  for(const id of Object.keys(forged)) for(const ph of phrases){
+    const r = await window.tenebrae.translate2(id, ph);
+    F.textForToks(id, r.toks);
+  }
+  await document.fonts.ready;
   const out = { langs: [] };
   for(const id of Object.keys(forged)){
     const f = forged[id];
-    const sc = C.TRANS[id].L.script;
+    // Celan Basic is a WORD script carved by composeWord — no alphabet in TRANS,
+    // and its codepoints are minted as words are written, so its glyph count is
+    // whatever this run happened to need
+    const sc = (C.TRANS[id] && C.TRANS[id].L && C.TRANS[id].L.script) || null;
     const used = new Set();
     for(const p of phrases){
       const r = await window.tenebrae.translate2(id, p);
@@ -58,7 +67,7 @@ const COLLECT = async (phrases) => {
     }
     const bytes = F.fontBytes(id);
     // does the browser actually have this face, and does the PUA text ink?
-    const sample = String.fromCharCode(f.base);
+    const sample = String.fromCharCode(f.auric ? (f.order.length ? f.words[f.order[0]].code : f.base) : f.base);
     const faceLoaded = document.fonts.check(`19px "${f.family}"`, sample);
     const ink = (txt, family) => {
       const cv = document.createElement('canvas'); cv.width = 80; cv.height = 80;
@@ -70,10 +79,12 @@ const COLLECT = async (phrases) => {
       let n = 0; for(let i = 0; i < d.length; i += 4) if(d[i] < 160) n++;
       return n;
     };
-    out.langs.push({ id, family: f.family, base: f.base, flow: f.flow,
-      nGlyphs: sc.glyphs.length, dotCode: f.base + sc.glyphs.length,
+    const nGlyphs = sc ? sc.glyphs.length : f.order.length;
+    const unmapped = String.fromCharCode(f.auric ? 0xF8FE : f.base + nGlyphs + 40);
+    out.langs.push({ id, family: f.family, base: f.base, flow: f.flow, auric: !!f.auric,
+      nGlyphs, dotCode: sc ? f.base + nGlyphs : null,
       used: [...used].sort((a, b) => a - b), bytes: b64(bytes), len: bytes.length,
-      faceLoaded, inkForged: ink(sample, f.family), inkUnmapped: ink(String.fromCharCode(f.base + sc.glyphs.length + 40), f.family) });
+      faceLoaded, inkForged: ink(sample, f.family), inkUnmapped: ink(unmapped, f.family) });
   }
   return out;
 };
@@ -112,7 +123,8 @@ for(const L of runA.langs){
   files.push({ ...L, path, sha: sha(L.bytes) });
   console.log(`${L.id.padEnd(14)} ${L.family.padEnd(30)} ${String(L.len).padStart(6)}B base=0x${L.base.toString(16)} glyphs=${L.nGlyphs} usedCodes=${L.used.length} faceLoaded=${L.faceLoaded} ink(forged)=${L.inkForged} ink(unmapped)=${L.inkUnmapped}`);
 }
-ck('all five scripted tongues forged a font', files.length === 5, files.map(f => f.id).join(','));
+ck('all six scripted tongues forged a font (five alphabets + the Auric word script)',
+   files.length === 6 && files.some(f => f.auric), files.map(f => f.id).join(','));
 ck('every forged face is loaded and covers its PUA block in the browser', files.every(f => f.faceLoaded));
 ck('forged glyphs actually ink (and an unmapped codepoint does not)',
    files.every(f => f.inkForged > 50 && f.inkUnmapped === 0),
@@ -218,17 +230,25 @@ if(ft){
   ck('every table directory checksum is correct', all.every(r => r.badChecksums.length === 0));
   ck('head.checkSumAdjustment is correct for the whole file', all.every(r => r.checkSumAdjustment && r.checkSumAdjustment.ok),
      Object.entries(ft).map(([id, r]) => `${id}:${r.checkSumAdjustment && r.checkSumAdjustment.stored}`).join(' '));
-  ck('name table carries the forged family name', all.every(r => (r.names || []).some(n => /Tenebrae Omni/.test(n))));
+  ck('name table carries the forged family name', all.every(r => (r.names || []).some(n => /^Tenebrae (Omni|Auric)/.test(n))),
+     JSON.stringify(Object.entries(ft).map(([id, r]) => `${id}:${(r.names || [])[0]}`)));
   // cmap must cover the WHOLE forged block, not just what the corpus happened
   // to use: space + every codex glyph + the unknown mark
-  const blockOK = files.every(f => ft[f.id].cmapSize === f.nGlyphs + 2 && ft[f.id].numGlyphs === f.nGlyphs + 3);
+  // an alphabet block is space + every codex glyph + the unknown mark; the Auric
+  // word font has no unknown mark — an unknown word gets its own pseudo-rune
+  const blockOK = files.every(f => f.auric
+    ? (ft[f.id].cmapSize === f.nGlyphs + 1 && ft[f.id].numGlyphs === f.nGlyphs + 2)
+    : (ft[f.id].cmapSize === f.nGlyphs + 2 && ft[f.id].numGlyphs === f.nGlyphs + 3));
   ck('cmap covers the whole forged block (space + every codex glyph + unknown mark)', blockOK,
-     files.map(f => `${f.id}: cmap=${ft[f.id].cmapSize} want=${f.nGlyphs + 2}, glyphs=${ft[f.id].numGlyphs} want=${f.nGlyphs + 3}`).join(' | '));
+     files.map(f => `${f.id}: cmap=${ft[f.id].cmapSize} want=${f.nGlyphs + (f.auric ? 1 : 2)}, glyphs=${ft[f.id].numGlyphs} want=${f.nGlyphs + (f.auric ? 2 : 3)}`).join(' | '));
 }else ck('fontTools validation ran', false, 'python3 invocation failed');
 
 // ---- the unknown-token mark is a real glyph in the font, not a Latin fallback
+// alphabets only: the Auric word font has no unknown mark, because an unknown
+// word is drawn as its own pseudo-rune stamped with the loan diamond
 ck('unknown-token mark is a forged glyph inside the PUA block',
-   files.every(f => f.dotCode === f.base + f.nGlyphs), files.map(f => `${f.id}:0x${f.dotCode.toString(16)}`).join(' '));
+   files.filter(f => !f.auric).every(f => f.dotCode === f.base + f.nGlyphs),
+   files.map(f => `${f.id}:${f.dotCode == null ? 'n/a (word script)' : '0x' + f.dotCode.toString(16)}`).join(' '));
 
 ck('no page exceptions', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log('TX-4 FONT FORGE VERDICT:', checks.every(c => c[1]) ? 'PASS' : 'FAIL');
