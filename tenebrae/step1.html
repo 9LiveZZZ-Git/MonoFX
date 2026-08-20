@@ -2420,6 +2420,36 @@ function epubSceneInto(d, body, sceneDoc){
     body.appendChild(el);
   });
 }
+/* Script text is DERIVED, never authoritative. The Auric word font mints a
+   codepoint the first time a word is written, so a doc saved in an earlier
+   session — or a scene the author has not opened in this one — can carry codes
+   that no longer mean the same word, or words the current face has never seen.
+   Any export that reads data-scr regenerates it from the stored English first,
+   which also mints every word the export is about to need a glyph for. */
+function syncScriptDoc(html){
+  if(!html || html.indexOf('tspan') === -1) return html;
+  const w = omniWin;
+  if(!w) return html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll('.tspan[data-omni]').forEach(el => {
+    try{
+      const r = omniTranslate(w, el.dataset.lang, el.dataset.src);
+      if(!r) return;
+      el.dataset.rom = r.romanization;
+      if(r.dir === 'rtl') el.setAttribute('dir', 'rtl'); else el.removeAttribute('dir');
+      const scr = omniScriptFor(r, w);
+      if(scr){
+        el.dataset.scr = scr;
+        if(r.flow && r.flow !== 'ltr') el.dataset.flow = r.flow; else delete el.dataset.flow;
+        el.textContent = scr;
+      }
+    }catch(e){}
+  });
+  const out = document.createElement('div');
+  out.appendChild(tpl.content);
+  return out.innerHTML;
+}
 function epubChapterXHTML(ch, o){
   return epubXhtml(ch.title || ' ', (d, body) => {
     if(o.chapterTitles && ch.title){ const h = d.createElementNS(XHTML_NS, 'h1'); h.textContent = ch.title; body.appendChild(h); }
@@ -2427,7 +2457,7 @@ function epubChapterXHTML(ch, o){
     scenes.forEach((s, i) => {
       if(i > 0 && o.asterism){ const p = d.createElementNS(XHTML_NS, 'p'); p.setAttribute('class', 'ast'); p.textContent = '⁂'; body.appendChild(p); }
       if(o.sceneTitles && s.title){ const h = d.createElementNS(XHTML_NS, 'h2'); h.textContent = s.title; body.appendChild(h); }
-      epubSceneInto(d, body, s.doc);
+      epubSceneInto(d, body, syncScriptDoc(s.doc));
     });
   });
 }
@@ -2497,7 +2527,7 @@ function epubLangCSS(){
     if(l.fontFamily) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${cssq(l.fontFamily)}'}`);
   if(omniForged){
     for(const [langId, f] of Object.entries(omniForged)) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${cssq(f.family)}'}`);
-    rules.push(`.tspan[data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes'}`);
+    if(!omniForged.celan_basic) rules.push(`.tspan[data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes'}`);
   }
   return rules.join('\n');
 }
@@ -2751,6 +2781,80 @@ function omniMatchWord(word, matcher){
   }
   return out;
 }
+/* ---------- Celan Basic: the Auric runes ----------
+   The other five tongues are alphabets: a bounded glyph table, one codepoint
+   per letter, forged once. Celan Basic is not. Its runes are drawn per WORD by
+   the codex's own carver (composeWord): a root rune, its domain radical, a
+   linking stroke per extra root, a loan diamond for anything the lexicon does
+   not know, and prefix/suffix marks anchored to the whole word. The set of
+   words is unbounded, so the font is forged LAZILY — a codepoint is minted the
+   first time a word is written and the face is rebuilt — and the geometry comes
+   from composeWord itself, so what the writer draws is what the codex draws. */
+const AURIC_BASE = 0xE800, AURIC_TOP = 0xF8FF; // 4352 words, plenty for a book
+let auricFace = null;
+function auricClean(word){
+  // exactly the codex's own carver input (transcribeHTML)
+  return String(word).replace(/[^\wéäí'-]/g, '').toLowerCase();
+}
+function auricGlyph(A, word){
+  // composeWord segments live in a unit box: y=0 top, y=1 baseline, marks in
+  // the gutters outside it. segsToSVG pads 0.36 above and 0.34 below, so 1.7
+  // units span the nominal size — map that onto the em and the script's own
+  // baseline lands on the font's.
+  const { segs, w: uw } = A.win.composeWord(word);
+  const U = 1000 / 1.7, PADX = 0.18, PADT = 0.36, HW = 0.0375; // sw 0.075 units
+  const tf = (x, y) => [Math.round((x + PADX) * U), Math.round(800 - (y + PADT) * U)];
+  const contours = [];
+  for(const [x1, y1, x2, y2] of segs) forgeCapsule([x1, y1], [x2, y2], HW, contours);
+  return { contours: contours.map(c => c.map(([x, y]) => tf(x, y))),
+           advance: Math.round((uw + PADX * 2) * U) };
+}
+function auricEnsure(words){
+  const A = omniForged && omniForged.celan_basic;
+  if(!A || !A.win || typeof A.win.composeWord !== 'function') return false;
+  let added = false;
+  for(const raw of words){
+    const word = auricClean(raw);
+    if(!word || A.words[word]) continue;
+    if(AURIC_BASE + A.order.length > AURIC_TOP) break; // out of block: leave it unwritten
+    try{
+      const g = auricGlyph(A, word);
+      A.words[word] = { code: AURIC_BASE + A.order.length, glyph: g };
+      A.order.push(word);
+      added = true;
+    }catch(e){}
+  }
+  if(added) auricRebuild();
+  return added;
+}
+function auricRebuild(){
+  const A = omniForged && omniForged.celan_basic;
+  if(!A) return;
+  const glyphs = [{ contours: [], advance: 1000 }, { contours: [], advance: 340 }]; // .notdef, space
+  const pairs = [[0x20, 1]];
+  A.order.forEach((word, i) => {
+    glyphs.push(A.words[word].glyph);
+    pairs.push([A.words[word].code, i + 2]);
+  });
+  A.ttf = forgeTTF(A.family, glyphs, pairs);
+  try{
+    if(auricFace) document.fonts.delete(auricFace);
+    auricFace = new FontFace(A.family, A.ttf.buffer.slice(A.ttf.byteOffset, A.ttf.byteOffset + A.ttf.byteLength));
+    auricFace.load().then(f => document.fonts.add(f)).catch(() => {});
+  }catch(e){}
+}
+function auricText(words){
+  const A = omniForged && omniForged.celan_basic;
+  if(!A) return null;
+  auricEnsure(words);
+  const out = [];
+  for(const raw of words){
+    const word = auricClean(raw);
+    const rec = word && A.words[word];
+    if(rec) out.push(String.fromCharCode(rec.code));
+  }
+  return out.length ? out.join(' ') : null;
+}
 function forgeOmniFonts(w){
   if(omniForged) return omniForged;
   const C = w.CODEX;
@@ -2788,6 +2892,12 @@ function forgeOmniFonts(w){
       face.load().then(f => document.fonts.add(f)).catch(() => {});
     }catch(e){}
   }
+  // Celan Basic joins the forge as a word-script; its glyphs arrive on demand
+  if(!omniForged.celan_basic && typeof w.composeWord === 'function'){
+    omniForged.celan_basic = { family: 'Tenebrae Auric Runes', base: AURIC_BASE, flow: 'ltr',
+                               win: w, words: {}, order: [], ttf: null, auric: true };
+    auricRebuild(); // an empty face now; words are minted as they are written
+  }
   omniScriptCSS();
   return omniForged;
 }
@@ -2806,6 +2916,20 @@ function omniScriptText(langId, toks){
   // column on its head.
   const f = omniForged && omniForged[langId];
   if(!f) return null;
+  if(f.auric){
+    // One rune per word, carved whole. Unlike the alphabets, this script has its
+    // own device for a word the lexicon does not know: composeWord draws a
+    // pseudo-rune and stamps it with the loan diamond. That is not English in
+    // costume, it is how Auric writes a borrowing — and it is what the codex's
+    // own Runes tab does with anything you type. So loans are written here,
+    // while an alphabet leaves them out (TX-6b).
+    const ws = [];
+    for(const tk of toks){
+      if(tk.sep || !tk.t) continue;
+      for(const part of String(tk.t).split(/\s+/)) if(part) ws.push(part);
+    }
+    return ws.length ? auricText(ws) : null;
+  }
   const wordStr = t => {
     // the codex strips everything outside [letters, digits, ' ’ -] from a word
     // before matching, so a sentence-final period is not written as a glyph
@@ -2861,7 +2985,8 @@ function omniScriptCSS(){
     for(const [langId, f] of Object.entries(omniForged)){
       rules.push(`.tspan[data-omni][data-lang="${langId}"]{font-family:'${f.family}';font-style:normal}`);
     }
-    rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
+    if(!omniForged.celan_basic)
+      rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
   }
   rules.push(`.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}`);
   rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:var(--tsrun,22em);line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);

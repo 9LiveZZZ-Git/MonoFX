@@ -123,8 +123,13 @@ const spanScr = await page.evaluate(async () => {
            fromToks: window.tenebrae._forge.textForToks('celan_basic', r.toks), rom: r.romanization };
 });
 console.log('celan_basic forge state:', JSON.stringify(spanScr));
-ck('Celan Basic has no forged font, so span script comes from the (correct) romanization',
-   spanScr.forged === false && spanScr.fromToks === null);
+// Celan Basic is forged now, as a word-script: one Auric rune per romanized
+// word, carved by the codex's own composeWord
+ck('Celan Basic is forged, one Auric rune per romanized word',
+   spanScr.forged === true && typeof spanScr.fromToks === 'string' &&
+   [...spanScr.fromToks].filter(c => c.charCodeAt(0) >= 0xE800).length ===
+     spanScr.rom.split(/\s+/).filter(Boolean).length,
+   JSON.stringify(spanScr));
 
 ck('no page exceptions', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log('CELAN TOKEN SPLIT VERDICT:', checks.every(c => c[1]) ? 'PASS' : 'FAIL');

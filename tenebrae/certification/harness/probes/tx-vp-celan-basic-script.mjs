@@ -1,22 +1,23 @@
 // TX-4 / TX-7 VERIFIER — whose script is Celan Basic's?
 //
-// The writer's TX-7 note says Celan Basic "has no codex glyph table, so its
-// script form is drawn through the legacy sample Auric rune font ... That is
-// the documented design — the sample codex supplies FONTS for that tongue,
-// never the translation." This probe tests both halves of that claim against
-// the codex itself:
+// This probe used to document a gap: Celan Basic had no forged font, so the
+// writer drew its romanization through the legacy sample rune face — a
+// per-letter substitution cipher, not a Tenebrae script. The codex does have a
+// script for it, the Auric runes, but not as an alphabet in TRANS[].L.script:
+// they are carved per WORD by composeWord — a root rune, its domain radical, a
+// link stroke per extra root, a loan diamond for anything the lexicon does not
+// know, and prefix/suffix marks anchored to the whole word.
 //
-//   1. is the ROMANIZATION the codex's?            (expected: yes)
-//   2. is the SCRIPT the codex's?                  (the actual question)
-//   3. does the codex in fact have a Celan script? (Futhark Auricum, VIII.)
-//   4. what generates the characters the user sees — the codex's rune engine,
-//      or SAMPLE_CODEX.languages['celan-basic'].script (base 0xE100 + the
-//      TN_DIGRAPHS table), i.e. a per-letter substitution of the romanization?
-//
-// The test for (4) is structural, not cosmetic: a letter-substitution cipher is
-// a homomorphism — same letters in, same glyphs out, anagrams stay anagrams —
-// while the codex's Futhark Auricum is logographic: one rune per ROOT, affix
-// marks at the corners, compounds fused into bind-blocks.
+// The gap is closed, so the probe now asserts the other direction:
+//   1. the romanization is the codex's                      (unchanged)
+//   2. celan_basic IS among the forged scripts
+//   3. its codepoints sit in the Auric block, not the sample block
+//   4. the face is the forged Auric family, not the sample TTF
+//   5. the forged glyph geometry is the codex carver's own, segment for
+//      segment — the structural test, since a substitution cipher could still
+//      produce plausible-looking marks
+//   6. it is logographic, not a cipher: an anagram of a word does NOT produce
+//      an anagram of its glyphs
 //
 // Run: cd probes && node tx-vp-celan-basic-script.mjs
 import { launch, wait, insertTranslationSpan, createBook, verdict } from './ex-lib.mjs';
@@ -28,137 +29,116 @@ const checks = [];
 const ck = (label, ok, detail) => { checks.push({ label, ok, detail }); console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ' — ' + detail : ''}`); };
 
 /* ---- 1. a real Celan Basic span, through the real UI ---- */
-await createBook(page, 'Celan Basic Provenance');
+await createBook(page, 'Auric Provenance');
 await page.click('#ed-content');
-await page.keyboard.type('the sea remembers the old king tonight');
-await wait(page, 400);
-await insertTranslationSpan(page, 'the sea remembers', 'Celan Basic');
-await wait(page, 800);
+await page.keyboard.type('opening line');
+await page.keyboard.press('Enter');
+await page.keyboard.type('the sea remembers the old king');
+await wait(page, 500);
+await insertTranslationSpan(page, 'the sea remembers the old king', 'Celan Basic');
+await wait(page, 1200);
 
 const span = await page.evaluate(() => {
-  const el = document.querySelector('#ed-content .tspan');
-  if (!el) return null;
-  const cs = getComputedStyle(el);
-  return {
-    lang: el.dataset.lang, src: el.dataset.src, rom: el.dataset.rom, scr: el.dataset.scr,
-    text: el.textContent, omni: el.dataset.omni, flow: el.dataset.flow || null,
-    font: cs.fontFamily, svg: el.querySelectorAll('svg').length,
-    codes: [...(el.dataset.scr || '')].map(c => c.charCodeAt(0)),
-  };
+  const sp = document.querySelector('#ed-content .tspan');
+  return sp ? { lang: sp.dataset.lang, src: sp.dataset.src, rom: sp.dataset.rom,
+                scr: sp.dataset.scr, text: sp.textContent,
+                family: getComputedStyle(sp).fontFamily,
+                codes: [...(sp.dataset.scr || '')].map(c => 'U+' + c.charCodeAt(0).toString(16)) } : null;
 });
-console.log('\nspan:', JSON.stringify({ ...span, codes: span.codes.map(c => 'U+' + c.toString(16).toUpperCase()) }, null, 1), '\n');
-ck('a Celan Basic span exists with source, romanization and script', !!span && !!span.src && !!span.rom && !!span.scr);
-ck('no <svg> inside the span (script is text)', span.svg === 0);
+console.log('span:', JSON.stringify({ ...span, scr: undefined, text: undefined }));
 
-/* ---- 2/3/4: interrogate the codex directly ---- */
-const probe = await page.evaluate(async ({ rom, scr }) => {
+const codexRom = await page.evaluate(async src => {
   const w = await window.tenebrae.engine();
-  const C = w.CODEX;
+  return w.translateE2C(src).filter(p => p.cel && !p.drop).map(p => p.cel).join(' ');
+}, 'the sea remembers the old king');
+ck('the romanization is the codex\'s own translateE2C output', !!span && span.rom === codexRom,
+   `${JSON.stringify(span && span.rom)} vs ${JSON.stringify(codexRom)}`);
 
-  // (a) is the romanization the codex's own?
-  const parts = w.translateE2C('the sea remembers');
-  const codexRom = parts.filter(p => p.cel && !p.drop).map(p => p.cel).join(' ');
+/* ---- 2/3/4. forged, in its own block, in its own face ---- */
+const forge = await page.evaluate(() => {
+  const m = window.tenebrae._forge.map() || {};
+  const A = m.celan_basic;
+  return { ids: Object.keys(m), auric: !!(A && A.auric), family: A && A.family,
+           base: A && A.base, words: A && A.order && A.order.slice(0, 8),
+           ttfLen: A && A.ttf && A.ttf.length };
+});
+console.log('forge:', JSON.stringify(forge));
+ck('celan_basic is among the forged-from-codex scripts', forge.ids.includes('celan_basic') && forge.auric,
+   JSON.stringify(forge.ids));
+ck('its codepoints sit in the Auric block, never the sample block U+E100..U+E11D',
+   !!span && span.codes.length > 0 &&
+   [...span.scr].every(c => { const n = c.charCodeAt(0); return n === 0x20 || (n >= 0xE800 && n <= 0xF8FF); }),
+   span && span.codes.join(','));
+ck('the face is the forged Auric family, not the sample codex TTF',
+   !!span && /Tenebrae Auric Runes/.test(span.family) && !/Celan Runes/.test(span.family), span && span.family);
+ck('the forged face carries a glyph per written word', !!forge.ttfLen && forge.words.length > 0,
+   `${forge.words && forge.words.join(' ')} — ${forge.ttfLen} bytes`);
 
-  // (b) does the codex have a Celan script of its own?
-  const hasRuneEngine = typeof w.wordRuneSVG === 'function';
-  const inTRANS = Object.prototype.hasOwnProperty.call(C.TRANS, 'celan_basic');
-  const forged = Object.keys(window.tenebrae._forge.map() || {});
-
-  // (c) reproduce SAMPLE_CODEX's cipher independently: NFD-strip, lowercase,
-  //     digraphs th/sh/ch/ck -> 26..29, a-z -> 0xE100 + (c - 'a')
-  const DG = { th: 26, sh: 27, ch: 28, ck: 29 };
-  const cipher = romz => {
-    let s = String(romz).replace(/þ/g, 'th').replace(/Þ/g, 'th');
-    try { s = s.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) {}
-    s = s.toLowerCase();
-    let out = '';
-    for (let i = 0; i < s.length; i++) {
-      const two = s.slice(i, i + 2);
-      if (DG[two] != null) { out += String.fromCharCode(0xE100 + DG[two]); i++; continue; }
-      const code = s.charCodeAt(i);
-      if (code >= 97 && code <= 122) out += String.fromCharCode(0xE100 + code - 97);
-      else out += s[i];
-    }
-    return out;
-  };
-  const sampleCipher = cipher(rom);
-
-  // (d) homomorphism test: is the rendering a per-letter substitution?
-  //     translate several words, then check every rendered codepoint is a fixed
-  //     function of its romanized letter, across all of them.
-  const words = ['sea', 'ease', 'stone', 'notes', 'onset', 'king', 'night', 'thing'];
-  const map = {}; let consistent = true, anagram = null;
-  for (const word of words) {
-    const r = await window.tenebrae.translate2('celan_basic', word);
-    const romw = r.romanization;
-    const s = cipher(romw);
-    // pair each cipher char with its source letter run
-    let i = 0, j = 0;
-    const src = romw.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-    while (i < src.length && j < s.length) {
-      const two = src.slice(i, i + 2);
-      const key = DG[two] != null ? two : src[i];
-      const cp = s.charCodeAt(j);
-      if (map[key] != null && map[key] !== cp) consistent = false;
-      map[key] = cp;
-      i += key.length; j++;
-    }
+/* ---- 5. geometry parity: the writer's glyph IS the carver's drawing ---- */
+const parity = await page.evaluate(async () => {
+  const w = await window.tenebrae.engine();
+  const A = window.tenebrae._forge.map().celan_basic;
+  const U = 1000 / 1.7, PADX = 0.18, PADT = 0.36;
+  const out = [];
+  for(const word of A.order){
+    const { segs, w: uw } = w.composeWord(word);
+    // the same mapping the forge uses, applied to the carver's own segments
+    const wantAdv = Math.round((uw + PADX * 2) * U);
+    const g = A.words[word].glyph;
+    // every carver segment must have a capsule whose two end-caps are centred
+    // on that segment's endpoints, within a rounding unit
+    const ends = segs.map(([x1, y1, x2, y2]) => [
+      [Math.round((x1 + PADX) * U), Math.round(800 - (y1 + PADT) * U)],
+      [Math.round((x2 + PADX) * U), Math.round(800 - (y2 + PADT) * U)]
+    ]);
+    const centres = g.contours.map(c => {
+      const xs = c.map(p => p[0]), ys = c.map(p => p[1]);
+      return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+    });
+    const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 26; // half stroke
+    const matched = ends.every(([a, b]) => centres.some(c => near(c, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])));
+    out.push({ word, segs: segs.length, contours: g.contours.length,
+               advOK: g.advance === wantAdv, matched });
   }
-  // anagram probe: 'notes' and 'onset' are anagrams in English; if their Celan
-  // romanizations are anagrams too, a cipher renders anagram glyph-multisets.
-  const rA = (await window.tenebrae.translate2('celan_basic', 'notes')).romanization;
-  const rB = (await window.tenebrae.translate2('celan_basic', 'onset')).romanization;
+  return out;
+});
+for(const r of parity) console.log(`   ${r.advOK && r.matched && r.contours === r.segs ? 'ok  ' : 'FAIL'} ${r.word.padEnd(12)} segs=${r.segs} contours=${r.contours} adv=${r.advOK} centres=${r.matched}`);
+ck('one capsule per carver segment, each centred on that segment',
+   parity.length > 0 && parity.every(r => r.contours === r.segs && r.matched),
+   JSON.stringify(parity.filter(r => r.contours !== r.segs || !r.matched)));
+ck('every glyph advance is the carver\'s own word width', parity.every(r => r.advOK),
+   JSON.stringify(parity.filter(r => !r.advOK).map(r => r.word)));
 
-  // (e) the codex's OWN Celan script for the same words, for comparison
-  const runeOf = word => {
-    try {
-      const svg = w.wordRuneSVG(word, 100, '#000').svg;
-      return { lines: (svg.match(/<line/g) || []).length, len: svg.length };
-    } catch (e) { return { err: String(e) }; }
-  };
-  const runes = {};
-  for (const word of ['mareth', 'marethin', 'sea', 'ea']) runes[word] = runeOf(word);
+/* ---- 6. logographic, not a letter cipher ---- */
+// The decisive structural difference: a per-letter substitution emits one
+// character per LETTER, so word length drives glyph count. The carver draws
+// each word whole — one character per word, whatever its length.
+const cipherTest = await page.evaluate(async () => {
+  const F = window.tenebrae._forge;
+  const rows = [];
+  for(const src of ['the sea', 'the sea remembers', 'the old king waits alone']){
+    const r = await window.tenebrae.translate2('celan_basic', src);
+    const scr = F.textForToks('celan_basic', r.toks) || '';
+    const glyphs = [...scr].filter(c => c.charCodeAt(0) >= 0xE800).length;
+    const romWords = r.romanization.split(/\s+/).filter(Boolean).length;
+    const romLetters = r.romanization.replace(/\s+/g, '').length;
+    rows.push({ src, rom: r.romanization, glyphs, romWords, romLetters });
+  }
+  // and two different words must draw differently — not one rune for everything
+  const A = F.map().celan_basic;
+  const sig = word => JSON.stringify(A.words[word].glyph.contours);
+  const distinct = new Set(A.order.map(sig)).size;
+  return { rows, distinct, words: A.order.length };
+});
+for(const r of cipherTest.rows)
+  console.log(`   ${r.glyphs === r.romWords ? 'ok  ' : 'FAIL'} ${JSON.stringify(r.rom).padEnd(40)} glyphs=${r.glyphs} words=${r.romWords} letters=${r.romLetters}`);
+ck('one glyph per WORD, never one per letter (logographic, not a cipher)',
+   cipherTest.rows.every(r => r.glyphs === r.romWords && r.glyphs !== r.romLetters),
+   JSON.stringify(cipherTest.rows.map(r => `${r.glyphs}/${r.romWords}/${r.romLetters}`)));
+ck('each word draws its own rune, not one rune reused',
+   cipherTest.distinct === cipherTest.words, `${cipherTest.distinct} distinct of ${cipherTest.words}`);
 
-  // (f) which font families does the app have available, and where do they come from?
-  const active = window.tenebrae.codex();
-  const sampleFams = [];
-  document.fonts.forEach(f => sampleFams.push(f.family));
-
-  return {
-    codexRom, hasRuneEngine, inTRANS, forged,
-    sampleCipher, cipherMatches: sampleCipher === scr,
-    consistentSubstitution: consistent, letterMap: Object.fromEntries(Object.entries(map).map(([k, v]) => [k, 'U+' + v.toString(16).toUpperCase()])),
-    anagram: { notes: rA, onset: rB, sameMultiset: rA.split('').sort().join('') === rB.split('').sort().join('') },
-    runes, activeKind: active && active.kind, loadedFamilies: [...new Set(sampleFams)],
-  };
-}, { rom: span.rom, scr: span.scr });
-
-console.log('\ncodex interrogation:', JSON.stringify(probe, null, 1), '\n');
-
-ck('the ROMANIZATION is the codex\'s own (translateE2C)', probe.codexRom === span.rom, `${span.rom} vs ${probe.codexRom}`);
-ck('the codex DOES have a Celan script of its own (Futhark Auricum rune engine)', probe.hasRuneEngine === true);
-ck('celan_basic is NOT among the forged-from-codex scripts', !probe.forged.includes('celan_basic'), JSON.stringify(probe.forged));
-ck('the rendered script is byte-identical to the legacy SAMPLE cipher of the romanization',
-   probe.cipherMatches, `scr=${JSON.stringify(span.scr)} sampleCipher=${JSON.stringify(probe.sampleCipher)}`);
-ck('every rendered glyph codepoint sits in the SAMPLE font block U+E100..U+E11D (not a forged block)',
-   span.codes.filter(c => c !== 0x20).every(c => c >= 0xE100 && c <= 0xE11D),
-   'codes ' + span.codes.map(c => 'U+' + c.toString(16)).join(','));
-ck('the face is the sample codex\'s embedded TTF "Tenebrae Celan Runes"', /Tenebrae Celan Runes/.test(span.font), span.font);
-ck('the rendering is a per-letter substitution (same letter -> same glyph, always)',
-   probe.consistentSubstitution === true);
-
-console.log('\nletter -> glyph map recovered from 8 words:', JSON.stringify(probe.letterMap));
-console.log('codex Futhark Auricum (its own Celan script), <line> count per word:', JSON.stringify(probe.runes));
-
-// The verdict this probe exists to render: is the script the user sees the
-// codex's, or the placeholder's?
-const isCodexScript = !probe.cipherMatches;
-ck('THE SCRIPT THE USER SEES IS THE CODEX\'S', isCodexScript,
-   'it is SAMPLE_CODEX.languages["celan-basic"].script (base 0xE100 + TN_DIGRAPHS) applied to the codex\'s romanization — a letter cipher in a placeholder font, while the codex\'s own Celan script is the logographic Futhark Auricum (codex.html:1885-2100, one rune per ROOT)');
-
-console.log('\npageerrors:', errors.length ? errors.slice(0, 3) : 'none');
-const failures = checks.filter(c => !c.ok);
-console.log(`${checks.length - failures.length}/${checks.length} checks ok`);
-verdict('CELAN BASIC SCRIPT PROVENANCE', failures.length === 0 && errors.length === 0);
+ck('no page exceptions', errors.length === 0, errors.slice(0, 3).join(' | '));
+verdict('CELAN BASIC SCRIPT PROVENANCE', checks.every(c => c.ok));
 await browser.close();
 await srv.close();

@@ -81,7 +81,7 @@ const uiSpans = await page.evaluate(() => [...document.querySelectorAll('#ed-con
 })));
 console.log('editor spans:', JSON.stringify(uiSpans, null, 1));
 ck('editor spans render PUA script text', uiSpans.length === 2 && uiSpans.every(sp => [...sp.text].some(c => c.charCodeAt(0) >= 0xE000)));
-ck('editor spans use their script fonts', uiSpans.every(sp => /Tenebrae Omni|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(uiSpans.map(sp => sp.family)));
+ck('editor spans use their script fonts', uiSpans.every(sp => /Tenebrae Omni|Tenebrae Auric Runes|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(uiSpans.map(sp => sp.family)));
 ck('Kerrackian span is RTL', uiSpans.find(sp => sp.lang === 'kerrackian').dir === 'rtl');
 
 // ---- imported codex: SVG glyph systems incl. vertical flows ----
@@ -120,7 +120,7 @@ const omniSpans = await page.evaluate(() => [...document.querySelectorAll('#ed-c
 console.log('omni spans:', JSON.stringify(omniSpans, null, 1));
 ck('imported-codex spans are TEXT — zero SVG', omniSpans.length >= 2 && omniSpans.every(sp => sp.svg === 0));
 ck('spans carry forged-font PUA script text', omniSpans.every(sp => sp.scrPUA > 0 && sp.textIsScr));
-ck('spans use the forged fonts', omniSpans.every(sp => /Tenebrae Omni|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(omniSpans.map(sp => sp.family)));
+ck('spans use the forged fonts', omniSpans.every(sp => /Tenebrae Omni|Tenebrae Auric Runes|Tenebrae Celan Runes/.test(sp.family)), JSON.stringify(omniSpans.map(sp => sp.family)));
 ck('vertical flows via writing-mode (both cols-rtl and btt-stave -> vertical-lr)',
    omniSpans.some(sp => sp.flow === 'cols-rtl' && sp.wm === 'vertical-lr') && omniSpans.some(sp => sp.flow === 'btt-stave' && sp.wm === 'vertical-lr'),
    JSON.stringify(omniSpans.map(sp => `${sp.lang}:${sp.flow}:${sp.wm}`)));

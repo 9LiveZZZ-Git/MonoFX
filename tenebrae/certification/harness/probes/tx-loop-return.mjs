@@ -118,7 +118,7 @@ ck('return hop: vertical flow attribute is cleared', returned.flow === null, `da
 ck('return hop: rtl dir attribute is cleared', returned.dir === null, `dir=${returned.dir}`);
 ck('return hop: writing-mode is back to horizontal', returned.writingMode === 'horizontal-tb', returned.writingMode);
 ck('return hop: direction is back to ltr', returned.direction === 'ltr', returned.direction);
-ck('return hop: drawn in the Auric rune face, not a Latin serif', /Tenebrae Celan Runes/.test(returned.family), returned.family);
+ck('return hop: drawn in the Auric rune face, not a Latin serif', /Tenebrae Auric Runes/.test(returned.family), returned.family);
 ck('return hop: still script text, never Latin', returned.pua && !returned.latin && returned.svg === 0, JSON.stringify(returned.text));
 const cbTruth = await page.evaluate(async src => {
   const w = await window.tenebrae.engine();
