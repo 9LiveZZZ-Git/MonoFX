@@ -1050,6 +1050,7 @@ function sanitizeHTML(html){
           if(child.dataset.flow) t.dataset.flow = String(child.dataset.flow).replace(/[^a-z-]/g, '').slice(0, 16);
           if(/^(s|l|xl)$/.test(child.dataset.size || '')) t.dataset.size = child.dataset.size;
           if(child.dataset.block === '1') t.dataset.block = '1';
+          if(child.dataset.pad === '1') t.dataset.pad = '1';
           if(child.dataset.omni) t.dataset.omni = '1';
           if(child.getAttribute('dir') === 'rtl') t.setAttribute('dir', 'rtl');
           t.setAttribute('contenteditable', 'false');
@@ -3969,7 +3970,9 @@ function rangeAround(el, absorbPad){
   r.selectNode(el);
   // placeTSpan writes span + NBSP; reverting or removing must consume that
   // same pad, or repeated translate/revert cycles accumulate spaces
-  if(absorbPad){
+  // only OUR pad — data-pad says so. Absorbing the author's own space instead
+  // would silently delete it every time a span is reverted.
+  if(absorbPad && el.dataset && el.dataset.pad === '1'){
     const nx = el.nextSibling;
     if(nx && nx.nodeType === 3 && /^\u00A0/.test(nx.nodeValue)) r.setEnd(nx, 1);
   }
@@ -4040,6 +4043,30 @@ function placeTSpan(span, langLabel){
       live.replaceWith(wrap);
       wrap.appendChild(live);
     }
+  }
+  // The pad exists so the caret has somewhere to land after an atomic span, but
+  // it is only OURS when nothing else provides the gap. Where the author's own
+  // space follows, our pad doubles it; before punctuation it reads as a typo —
+  // "…stand , and" instead of "…stand, and". Whoever ends up owning the gap is
+  // recorded on the span, because revert must absorb our pad and must NOT eat
+  // the author's space.
+  if(live){
+    const pad = live.nextSibling;
+    let ours = false;
+    if(pad && pad.nodeType === 3 && pad.nodeValue.charCodeAt(0) === 0x00A0){
+      const rest = pad.nodeValue.slice(1);
+      const sib = pad.nextSibling;
+      const tail = rest || (sib ? (sib.nodeType === 3 ? sib.nodeValue : sib.textContent) : '');
+      const nextCh = tail.charAt(0);
+      if(!nextCh) ours = true;                                    // end of block: the caret needs it
+      else if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(nextCh)){
+        if(rest) pad.nodeValue = rest; else pad.remove();          // punctuation: no gap at all
+      }else if(/[\s\u00A0]/.test(nextCh)){
+        if(rest) pad.nodeValue = rest.replace(/^[\s\u00A0]+/, ' ');
+        else { pad.remove(); if(sib && sib.nodeType === 3) sib.nodeValue = sib.nodeValue.replace(/^[\s\u00A0]+/, ' '); }
+      }else ours = true;                                          // no space of theirs: the pad separates
+    }
+    if(ours) live.dataset.pad = '1'; else delete live.dataset.pad;
   }
   if(live) delete live.dataset.tsnew;
   delete span.dataset.tsnew;
