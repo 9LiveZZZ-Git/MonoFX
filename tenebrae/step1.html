@@ -1804,6 +1804,7 @@ $('#lib-more').addEventListener('click', () => {
     { label: 'New book', icon: ICONS.plus, onTap: promptNewBook },
     { label: 'Import manuscript…', icon: ICONS.imp, immediate: true, onTap: () => $('#import-input').click() },
     { label: 'Tenebrae Codex…', icon: ICONS.rune, onTap: codexSheet },
+    { label: claudeReady() ? 'Claude assist — on' : 'Claude assist — off', icon: ICONS.pencil, onTap: claudeSheet },
     { label: 'Back up everything (.json)', icon: ICONS.json, onTap: backupAll },
     { label: 'Restore from backup…', icon: ICONS.restore, immediate: true, onTap: () => $('#restore-input').click() },
     { note: `Tenebrae Writer · step 2 (script-as-text build) — offline manuscript editor.<br>${esc(storageLabel())}. Autosaves as you write.<br>Import reads .md, .txt, .docx, .rtf, .epub and .html.<br>Export writes .md, .txt, .docx and .epub.` }
@@ -1856,6 +1857,11 @@ function sceneSheet(sceneId, selText){
   const cardItems = [];
   if(fromEditor){
     cardItems.push({ label: 'Cards in this scene', icon: ICONS.cards, onTap: () => cardsInSceneSheet(sceneId) });
+    // the assist passes appear only once the author has supplied a key
+    if(claudeReady()){
+      cardItems.push({ label: 'Copy-edit this scene', icon: ICONS.pencil, onTap: claudeGrammarSheet });
+      cardItems.push({ label: 'Harvest cards from this scene', icon: ICONS.cards, onTap: claudeCardsSheet });
+    }
     if(selText){
       const short = selText.length > 26 ? selText.slice(0, 25) + '…' : selText;
       cardItems.push({ label: `Translate “${short}”…`, icon: ICONS.rune, onTap: () => translateSheet(selText, sceneId) });
@@ -4429,6 +4435,10 @@ try{
       if(scope === 'scene'){ const sc = currentScene(); return sc ? pdfFile(b, 'scene', sc) : null; }
       return pdfFile(b, 'book');
     },
+    _claude: { ready: () => claudeReady(), setKey: k => { claudeKey = k; return kvSet('claudeKey', k); },
+               model: () => claudeModel, sceneText: doc => claudeSceneText(doc),
+               grammar: t => claudeGrammar(t), cards: (t, k) => claudeCards(t, k),
+               endpoint: () => CLAUDE_ENDPOINT },
     _forge: { map: () => omniForged,
               textFor: (langId, word) => omniScriptText(langId, [{ t: String(word) }]),
               textForToks: (langId, toks) => omniScriptText(langId, toks || []),
@@ -4440,6 +4450,340 @@ try{
              probe: { sanitize: h => sanitizeHTML(h), sceneDoc: () => { const sc = currentScene(); return sc ? sc.doc : null; } } }
   });
 }catch(e){}
+
+/* ================= Claude assist (BYOK) =================
+   The app is offline by design and stays that way: nothing here runs at boot,
+   nothing runs without the author tapping a button, and until they paste their
+   own key none of it exists. The key is the author's, held in this device's
+   IndexedDB under its own kv key — deliberately NOT inside `state`, so it can
+   never ride along in a backup file they share.
+
+   Two passes, both proposals the author accepts one at a time:
+     · a grammar read of the current scene
+     · card harvesting — people, places, factions the scene introduces
+
+   Everything comes back as constrained JSON (output_config.format), and every
+   claim is checked against the manuscript before it is offered: a suggestion
+   whose "before" is not in the scene, or a quote that is not verbatim, is
+   dropped rather than shown. The model is a reader here, never an author —
+   it does not get to write into the book, and it never sees or edits the
+   Tenebrae inside a translated span.
+*/
+const CLAUDE_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+const CLAUDE_MODELS = [
+  ['claude-opus-5',    'Opus 5',    'the most capable — the default'],
+  ['claude-sonnet-5',  'Sonnet 5',  'faster and cheaper'],
+  ['claude-haiku-4-5', 'Haiku 4.5', 'cheapest; fine for a grammar read'],
+];
+let claudeKey = null, claudeModel = 'claude-opus-5', claudeLast = null;
+async function claudeLoad(){
+  try{
+    claudeKey = (await kvGet('claudeKey')) || null;
+    const m = await kvGet('claudeModel');
+    if(m && CLAUDE_MODELS.some(x => x[0] === m)) claudeModel = m;
+  }catch(e){}
+}
+const claudeReady = () => !!claudeKey;
+
+/* one request, one answer, shaped by a JSON schema the API enforces */
+async function claudeAsk(system, user, schema, maxTokens){
+  if(!claudeKey) throw new Error('No API key set');
+  const body = {
+    model: claudeModel,
+    max_tokens: maxTokens || 8000,
+    system,
+    messages: [{ role: 'user', content: user }],
+    output_config: { format: { type: 'json_schema', schema } }
+  };
+  let res;
+  try{
+    res = await fetch(CLAUDE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        'x-api-key': claudeKey,
+        // this app has no server to proxy through: the key is the author's own,
+        // held on their device, and the request goes straight from the browser
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(body)
+    });
+  }catch(e){ throw new Error('Could not reach the API — check the connection'); }
+  if(!res.ok){
+    let msg = `HTTP ${res.status}`;
+    try{ const j = await res.json(); if(j && j.error && j.error.message) msg = j.error.message; }catch(e){}
+    if(res.status === 401) msg = 'That API key was rejected';
+    else if(res.status === 429) msg = 'Rate limited — try again in a moment';
+    else if(res.status >= 500) msg = 'The API is having trouble — try again';
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  if(data.stop_reason === 'refusal') throw new Error('Claude declined to answer that');
+  if(data.stop_reason === 'max_tokens') throw new Error('The answer was cut short — try a shorter scene');
+  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  let out;
+  try{ out = JSON.parse(text); }catch(e){ throw new Error('Claude did not answer in the expected shape'); }
+  claudeLast = { model: data.model, usage: data.usage || {} };
+  return out;
+}
+
+/* ---- what the model is allowed to see ----
+   Spans go in as the author's ENGLISH, never as script or romanization: the
+   Tenebrae is the codex's to write, and a grammar pass has no business inside
+   it. Blocks are separated so sentences do not fuse across paragraphs. */
+function claudeSceneText(doc){
+  const tpl = document.createElement('div');
+  tpl.innerHTML = doc || '';
+  tpl.querySelectorAll('.tspan').forEach(t => t.replaceWith(document.createTextNode(t.dataset.src || '')));
+  const out = [];
+  tpl.querySelectorAll('p,div,h2,h3,blockquote,li').forEach(b => {
+    const t = (b.textContent || '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+    if(t) out.push(t);
+  });
+  if(!out.length){
+    const t = (tpl.textContent || '').replace(/\s+/g, ' ').trim();
+    if(t) out.push(t);
+  }
+  return out.join('\n\n');
+}
+
+/* ---- pass 1: a grammar read ---- */
+const CLAUDE_GRAMMAR_SCHEMA = {
+  type: 'object',
+  properties: {
+    fixes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          before: { type: 'string' },
+          after:  { type: 'string' },
+          why:    { type: 'string' },
+          kind:   { type: 'string', enum: ['spelling', 'grammar', 'punctuation', 'agreement', 'tense', 'repetition'] }
+        },
+        required: ['before', 'after', 'why', 'kind'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['fixes'],
+  additionalProperties: false
+};
+const CLAUDE_GRAMMAR_SYSTEM =
+  'You are a copy-editor reading a novel manuscript. Report only objective errors: '
+  + 'spelling, grammar, punctuation, subject-verb agreement, tense slips, and accidental word repetition. '
+  + 'Do NOT touch style, voice, rhythm, dialect, or word choice — this author writes deliberately. '
+  + 'Do NOT flag invented names, places, or words: this is secondary-world fiction and its proper nouns are correct by definition. '
+  + 'Each "before" MUST be copied verbatim from the manuscript, long enough to occur exactly once, and short enough to be one edit. '
+  + 'If the passage is clean, return an empty list. Never invent an error to seem useful.';
+
+async function claudeGrammar(text){
+  const out = await claudeAsk(CLAUDE_GRAMMAR_SYSTEM,
+    'Read this scene and report objective errors only.\n\n<scene>\n' + text + '\n</scene>', CLAUDE_GRAMMAR_SCHEMA);
+  const fixes = Array.isArray(out.fixes) ? out.fixes : [];
+  // the guardrail: a fix whose "before" is not in the scene, or is not unique,
+  // cannot be applied safely — drop it rather than offer an edit that misfires
+  const seen = new Set();
+  return fixes.filter(f => {
+    if(!f || typeof f.before !== 'string' || typeof f.after !== 'string') return false;
+    if(!f.before.trim() || f.before === f.after) return false;
+    const n = text.split(f.before).length - 1;
+    if(n !== 1) return false;
+    if(seen.has(f.before)) return false;
+    seen.add(f.before);
+    return true;
+  });
+}
+
+/* ---- pass 2: card harvesting ---- */
+const CLAUDE_CARDS_SCHEMA = {
+  type: 'object',
+  properties: {
+    cards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title:    { type: 'string' },
+          type:     { type: 'string', enum: ['person', 'place', 'thing', 'faction', 'event', 'language', 'artifact'] },
+          aliases:  { type: 'array', items: { type: 'string' } },
+          keywords: { type: 'array', items: { type: 'string' } },
+          quotes:   { type: 'array', items: { type: 'string' } },
+          notes:    { type: 'string' }
+        },
+        required: ['title', 'type', 'aliases', 'keywords', 'quotes', 'notes'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['cards'],
+  additionalProperties: false
+};
+const CLAUDE_CARDS_SYSTEM =
+  'You are building a world-wiki from a novel manuscript. Identify the people, places, factions, '
+  + 'things, events, languages and artifacts this scene introduces or reveals something about. '
+  + 'Every string in "quotes" MUST be copied verbatim from the scene, word for word — a quote you '
+  + 'paraphrase is worse than no quote. "notes" is one or two sentences, drawn only from what the '
+  + 'scene actually says: do not speculate, do not invent history, do not fill gaps. '
+  + 'Skip anything already obvious from a single mention in passing.';
+
+async function claudeCards(text, existingTitles){
+  const known = (existingTitles || []).slice(0, 200);
+  const user = 'Harvest world-wiki cards from this scene.\n\n'
+    + (known.length ? 'These cards already exist; only include one if this scene genuinely adds to it:\n'
+        + known.map(t => '- ' + t).join('\n') + '\n\n' : '')
+    + '<scene>\n' + text + '\n</scene>';
+  const out = await claudeAsk(CLAUDE_CARDS_SYSTEM, user, CLAUDE_CARDS_SCHEMA);
+  const cards = Array.isArray(out.cards) ? out.cards : [];
+  const norm = s2 => String(s2).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
+  const hay = norm(text);
+  return cards.filter(c => c && typeof c.title === 'string' && c.title.trim()).map(c => ({
+    title: c.title.trim(),
+    type: CARD_TYPES.some(t => t[0] === c.type) ? c.type : 'thing',
+    aliases: (Array.isArray(c.aliases) ? c.aliases : []).map(x => String(x).trim()).filter(Boolean).slice(0, 8),
+    keywords: (Array.isArray(c.keywords) ? c.keywords : []).map(x => String(x).trim()).filter(Boolean).slice(0, 12),
+    // the guardrail: a quote that is not actually in the scene is a fabrication,
+    // and a world-wiki built on fabricated quotes is worse than an empty one
+    quotes: (Array.isArray(c.quotes) ? c.quotes : []).map(x => String(x).trim())
+      .filter(q => q && hay.indexOf(norm(q)) > -1).slice(0, 4),
+    notes: typeof c.notes === 'string' ? c.notes.trim() : ''
+  }));
+}
+
+/* ---- applying a fix: through execCommand, so undo reverses it ---- */
+function claudeApplyFix(fix){
+  // find the text OUTSIDE any span — a translated span is the codex's, and a
+  // copy-editor has no business inside it
+  const walker = document.createTreeWalker(edContent, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => (n.parentElement && n.parentElement.closest('.tspan'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  let n;
+  while((n = walker.nextNode())){
+    const i = n.nodeValue.indexOf(fix.before);
+    if(i < 0) continue;
+    const r = document.createRange();
+    r.setStart(n, i); r.setEnd(n, i + fix.before.length);
+    try{
+      if(edApplyText(r, fix.after)){
+        persistEditor(); updateCount(); flushSave();
+        return true;
+      }
+    }catch(e){}
+    return false;
+  }
+  return false;
+}
+
+function claudeGrammarSheet(){
+  const s = currentScene();
+  if(!s) return;
+  const text = claudeSceneText(s.doc);
+  if(!text.trim()){ toast('Nothing written in this scene yet'); return; }
+  toast('Reading the scene…');
+  claudeGrammar(text).then(fixes => {
+    if(!fixes.length){ toast('Nothing to correct — the scene reads clean'); return; }
+    let left = fixes.slice();
+    const render = () => {
+      if(!left.length){ closeSheet(); toast('Done'); return; }
+      const f = left[0];
+      actionSheet(`Copy-edit · ${fixes.length - left.length + 1} of ${fixes.length}`, [
+        { note: `<div class="ts-rom" style="opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-size:11px">${esc(f.kind || 'edit')}</div>`
+              + `<div class="ts-src" style="text-decoration:line-through;opacity:.65">${esc(f.before)}</div>`
+              + `<div class="ts-src" style="font-style:normal"><b>${esc(f.after)}</b></div>`
+              + `<div class="ts-rom">${esc(f.why || '')}</div>` },
+        { label: 'Accept this change', icon: ICONS.check || ICONS.pencil, onTap: () => {
+            const ok = claudeApplyFix(f);
+            toast(ok ? 'Changed' : 'Couldn’t find that line any more');
+            left = left.slice(1); setTimeout(render, 260);
+          } },
+        { label: 'Skip', icon: ICONS.close || ICONS.trash, onTap: () => { left = left.slice(1); setTimeout(render, 220); } },
+        { label: 'Stop reviewing', destructive: true, onTap: () => {} },
+        { note: claudeCostNote() }
+      ]);
+    };
+    render();
+  }).catch(e => toast(e.message || 'That didn’t work'));
+}
+
+function claudeCardsSheet(){
+  const b = bookById(currentBookId), s = currentScene();
+  if(!b || !s) return;
+  const text = claudeSceneText(s.doc);
+  if(!text.trim()){ toast('Nothing written in this scene yet'); return; }
+  toast('Reading the scene…');
+  claudeCards(text, (b.cards || []).map(c => c.title)).then(cards => {
+    if(!cards.length){ toast('Nothing new to file'); return; }
+    let left = cards.slice();
+    const render = () => {
+      if(!left.length){ closeSheet(); renderBook(); toast('Done'); return; }
+      const c = left[0];
+      const exists = (b.cards || []).find(x => x.title.toLowerCase() === c.title.toLowerCase());
+      actionSheet(`Card · ${cards.length - left.length + 1} of ${cards.length}`, [
+        { note: `<div class="ts-rom" style="opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-size:11px">${esc((CARD_TYPES.find(t => t[0] === c.type) || [,'Thing'])[1])}${exists ? ' · already filed' : ''}</div>`
+              + `<div class="ts-src" style="font-style:normal;font-size:18px"><b>${esc(c.title)}</b></div>`
+              + (c.aliases.length ? `<div class="ts-rom">also: ${esc(c.aliases.join(', '))}</div>` : '')
+              + (c.notes ? `<div class="ts-src">${esc(c.notes)}</div>` : '')
+              + (c.quotes.length ? c.quotes.map(q => `<div class="ts-rom">“${esc(q)}”</div>`).join('') : '')
+              + (c.keywords.length ? `<div class="ts-rom" style="opacity:.6">${esc(c.keywords.join(' · '))}</div>` : '') },
+        { label: exists ? 'Add to the existing card' : 'File this card', icon: ICONS.cards, onTap: () => {
+            const card = exists || newCard(c.title, c.type);
+            card.aliases = [...new Set([...(card.aliases || []), ...c.aliases])];
+            card.keywords = [...new Set([...(card.keywords || []), ...c.keywords])];
+            card.quotes = [...new Set([...(card.quotes || []), ...c.quotes])];
+            if(c.notes) card.notes = card.notes ? card.notes + '\n\n' + c.notes : c.notes;
+            card.updated = Date.now();
+            if(!exists){ b.cards = b.cards || []; b.cards.push(card); }
+            scheduleSave(); flushSave();
+            toast(exists ? 'Added to ' + card.title : 'Filed ' + card.title);
+            left = left.slice(1); setTimeout(render, 260);
+          } },
+        { label: 'Skip', onTap: () => { left = left.slice(1); setTimeout(render, 220); } },
+        { label: 'Stop reviewing', destructive: true, onTap: () => {} },
+        { note: claudeCostNote() }
+      ]);
+    };
+    render();
+  }).catch(e => toast(e.message || 'That didn’t work'));
+}
+function claudeCostNote(){
+  if(!claudeLast) return '';
+  const u = claudeLast.usage || {};
+  return `<span class="cx-badge">${esc(claudeLast.model || claudeModel)}</span> ${fmt(u.input_tokens || 0)} in · ${fmt(u.output_tokens || 0)} out`;
+}
+
+/* ---- settings ---- */
+function claudeSheet(){
+  const on = claudeReady();
+  actionSheet('Claude assist', [
+    { note: on
+        ? 'Your key is on this device only. It is kept outside the manuscript state, so a backup file never carries it.'
+        : 'Off. Paste an API key from console.anthropic.com to switch it on.<br><br>'
+          + 'Everything else in this app is offline. This one feature is not: when you tap a pass, the '
+          + 'scene’s English is sent to Anthropic from this device. Translated spans go as your original '
+          + 'English, never as script. Nothing is sent automatically, and nothing is ever changed without you accepting it.' },
+    { label: on ? 'Replace API key…' : 'Paste API key…', icon: ICONS.pencil, onTap: () => {
+        promptSheet('Anthropic API key', { value: '', placeholder: 'sk-ant-…', saveLabel: 'Save' }, v => {
+          const k = (v || '').trim();
+          if(!k){ toast('Nothing pasted'); return; }
+          if(!/^sk-ant-/.test(k)){ toast('That doesn’t look like an Anthropic key'); return; }
+          claudeKey = k; kvSet('claudeKey', k);
+          toast('Claude assist is on');
+        });
+      } },
+    ...(on ? [{ label: 'Model — ' + (CLAUDE_MODELS.find(m => m[0] === claudeModel) || [,'?'])[1], icon: ICONS.rune, onTap: () => {
+        actionSheet('Model', CLAUDE_MODELS.map(([id, name, why]) => ({
+          label: `${name} — ${why}`, checked: id === claudeModel,
+          onTap: () => { claudeModel = id; kvSet('claudeModel', id); toast(name); }
+        })));
+      } }] : []),
+    ...(on ? [{ label: 'Forget the key', icon: ICONS.trash, destructive: true, onTap: () => {
+        claudeKey = null; kvSet('claudeKey', null);
+        toast('Key forgotten — back to fully offline');
+      } }] : []),
+  ]);
+}
 
 /* ================= cards ================= */
 /*
@@ -5887,6 +6231,7 @@ async function boot(){
   state.codex = state.codex || null;
   if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null; // reject malformed packs from old saves
   if(!state.codex){ const ep = embeddedCodexPack(); if(ep){ state.codex = ep; state.lastLang = state.lastLang || 'celan_basic'; } }
+  claudeLoad(); // a local kv read only — no request is ever made at boot
   if(omniPack()) setTimeout(() => { ensureOmni().then(w => { if(w) forgeOmniFonts(w); }); }, 600); // warm engine + forge fonts in the background
   if(omniPack()) ensureOmni(); // wake the codex engine in the background
   state.lastLang = state.lastLang || null;

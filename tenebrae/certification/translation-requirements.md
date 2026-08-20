@@ -100,6 +100,29 @@ demonstrated against the running app.
   reproduces its chapter/scene structure exactly. Foreign Markdown carries no markers and
   keeps the heading-level heuristic.
 
+### Claude assist (v1.5, BYOK — the one feature that is not offline)
+- **TX-13** (F) **It does not exist until the author opts in.** No key, no feature: the
+  passes are absent from every menu, nothing is sent, and no request is made at boot or on
+  any other path. The default model is `claude-opus-5`; Sonnet 5 and Haiku 4.5 are offered
+  as the author's cost choice, never selected for them.
+- **TX-14** (F) **The Tenebrae is never sent.** A translated span goes to the API as the
+  author's stored English, never as script or romanization — no PUA codepoint may appear in
+  any request body — and no accepted edit may land inside a span.
+- **TX-15** (F) **Constrained answers, verified claims.** Requests use
+  `output_config.format` with a closed JSON schema (`additionalProperties: false`
+  throughout), the documented headers (`anthropic-version`, `x-api-key`, and an explicit
+  `anthropic-dangerous-direct-browser-access`), and a real `max_tokens`. Every claim is
+  then checked against the manuscript before it is offered: a copy-edit whose anchor is
+  absent, ambiguous (occurring more than once), or a no-op is dropped; a card quote that is
+  not verbatim in the scene is dropped. Nothing is ever applied without the author accepting
+  it, and every accepted edit goes through `execCommand` so undo reverses it.
+- **TX-16** (F) **Failure says something true.** A rejected key, a rate limit, a refusal
+  (`stop_reason: "refusal"`) and a malformed answer each surface a distinct, plain message;
+  none is swallowed or treated as a result.
+- **TX-17** (F) **The key stays on the device.** It is held under its own kv key, outside
+  the manuscript state, so a backup file the author shares cannot contain it — asserted
+  against real downloaded backup bytes, not against the code.
+
 ### Robustness
 - **TX-11c** (F) **A selection the codex cannot write produces no span.** If every word of
   a selection is untranslatable, the codex's own wing draws nothing (`if(cleanText)`), so the
