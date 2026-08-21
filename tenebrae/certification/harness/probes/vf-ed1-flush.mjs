@@ -1,4 +1,23 @@
 // vf-ED-1 — adversarial re-check of the "flush on visibilitychange" hole.
+//
+// CONTRACT UPDATE (2026-08 triage): the hole this probe was written to
+// substantiate has been CLOSED. flushSave() now pulls the editor DOM into
+// state before snapshotting:
+//   step1.html L1011-1017
+//     function flushSave(){
+//       // keystrokes younger than the input debounce live only in the editor
+//       // DOM — pull them into state before snapshotting, or a hide+discard
+//       // loses them
+//       try{ persistEditor(); persistCard(); }catch(e){}
+//       clearTimeout(saveTimer); saveTimer = null;
+//       kvSet('state', JSON.parse(JSON.stringify(state)));
+//     }
+// So the probe's assertion is inverted to the governing contract, ED-1
+// ("edits autosave (debounced) and flush on visibilitychange",
+// certification/step1-requirements.md L30): a page hidden mid-keystroke must
+// carry the tail into the flushed IndexedDB write. Same three measurements,
+// same rigour (no reload anywhere — the flushed write is read directly);
+// only the expected sign changed.
 // The original probe (st-editor-save.mjs) reloaded 120ms after dispatching the
 // hidden visibilitychange; a skeptic could argue the reload raced the IDB
 // write. This probe avoids reload entirely for the core assertion:
@@ -90,10 +109,15 @@ console.log('tail-burst was in the editor DOM at hide time:', domHasTail);
 console.log('tail-burst reaches IDB later via debounce (page survived):', later !== null && later.includes('tail-burst'));
 
 console.log('pageerrors:', errors.length ? errors : 'none');
-const holeConfirmed = !tailInFlushedWrite && domHasTail && c2 !== null && c2.includes('aged-text');
-console.log('vf-ED-1 VERDICT:', holeConfirmed
-  ? 'HOLE CONFIRMED — flushSave() on visibilitychange writes state without persistEditor(); keystrokes inside the 450ms editor debounce are absent from the flushed write and would be lost if the hidden page were discarded'
-  : (tailInFlushedWrite ? 'HOLE NOT REPRODUCED — flush captured sub-debounce typing (tester erred)' : 'INCONCLUSIVE'));
+const checks = [];
+const ok = (label, cond) => { checks.push(!!cond); console.log((cond ? 'ok  ' : 'FAIL'), label); };
+ok('baseline paragraph persisted', base !== null && base.includes('anchor paragraph settled'));
+ok('aged text (>450ms) captured by the hidden flush', c2 !== null && c2.includes('aged-text'));
+ok('the tail really was in the editor DOM at hide time (probe is honest)', domHasTail);
+ok('sub-debounce tail (<450ms) IS in the flushed write — no data loss on hide+discard', tailInFlushedWrite);
+ok('tail also reaches IDB via the normal debounce', later !== null && later.includes('tail-burst'));
+ok('no page exceptions', errors.length === 0);
+console.log('vf-ED-1 VERDICT:', checks.every(Boolean) ? 'PASS' : 'FAIL');
 
 await browser.close();
 await srv.close();

@@ -1,8 +1,13 @@
 // ED-1 / PR-1 — title + body contenteditable editing with debounced autosave
 // (no explicit save button); state lands in IndexedDB; full structure +
 // title + body survive reload; visibilitychange flushes a pending save.
-// Also probes the flush hole: keystrokes younger than the 450 ms editor
-// debounce at the moment the page hides/reloads.
+// Also probes what used to be the flush hole: keystrokes younger than the
+// 450 ms editor debounce at the moment the page hides/reloads.
+// CONTRACT UPDATE (2026-08 triage): flushSave() now calls persistEditor()
+// before snapshotting state (step1.html L1011-1017), so sub-debounce
+// keystrokes ARE carried into the flushed write. ED-1 ("edits autosave
+// (debounced) and flush on visibilitychange") is therefore asserted here in
+// full — the tail is a required check now, not a note.
 // Run: cd probes && node st-editor-save.mjs
 import { chromium } from 'playwright-core';
 import { startServer } from '../serve.mjs';
@@ -124,15 +129,16 @@ const s3 = idb3 && idb3.books && idb3.books[0].chapters[0].scenes[0];
 const tailKept = s3 ? s3.doc.includes('TAIL-TEXT') : null;
 console.log('sub-debounce tail kept after hide+reload:', tailKept, '(false = last <450ms of typing lost)');
 
-const ok =
-  shape.titleCE === 'true' && shape.bodyCE === 'true' && shape.saveButtons.length === 0 &&
-  s1 && s1.title === 'The Tide Ledger' && s1.docHasP1 !== false &&
-  rowTitle === 'The Tide Ledger' &&
-  edTitle === 'The Tide Ledger' &&
-  edBody.includes('The sea remembers what the ledger forgot.') &&
-  edBody.includes('Salt keeps the older accounts.') &&
-  s2 && s2.doc.includes('Flushed line.');
-console.log(ok ? 'ED-1/PR-1 VERDICT: PASS (see tail-loss note above)' : 'ED-1/PR-1 VERDICT: FAIL');
+const checks = [];
+const okc = (label, cond) => { checks.push(!!cond); console.log((cond ? 'ok  ' : 'FAIL'), label); };
+okc('title + body are contenteditable', shape.titleCE === 'true' && shape.bodyCE === 'true');
+okc('no explicit save button', shape.saveButtons.length === 0);
+okc('debounced autosave reached IndexedDB', !!s1 && s1.title === 'The Tide Ledger' && s1.docHasP1 !== false && s1.docHasP2 !== false);
+okc('structure + scene title survive reload', rowTitle === 'The Tide Ledger' && edTitle === 'The Tide Ledger');
+okc('body survives reload', edBody.includes('The sea remembers what the ledger forgot.') && edBody.includes('Salt keeps the older accounts.'));
+okc('visibilitychange flush keeps debounced-but-unsaved text', !!s2 && s2.doc.includes('Flushed line.'));
+okc('visibilitychange flush keeps sub-debounce (<450ms) keystrokes', tailKept === true);
+console.log(checks.every(Boolean) ? 'ED-1/PR-1 VERDICT: PASS' : 'ED-1/PR-1 VERDICT: FAIL');
 
 await browser.close();
 await srv.close();

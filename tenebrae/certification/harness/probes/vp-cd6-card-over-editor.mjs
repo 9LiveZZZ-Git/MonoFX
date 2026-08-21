@@ -1,11 +1,20 @@
-// vp-CD-6 (adversarial skeptic): "cards reachable from the editor". The
-// recorded pass verified the card screen's DOM state after opening a card from
-// the editor's "Cards in this scene" sheet — but DOM reads don't prove the
-// screen is usable. Screens are stacked with fixed z-indexes (#scr-card
-// z-index:4 < #scr-editor z-index:5, L92-93) and a screen left "under" keeps
-// visibility:visible with translateX(-26%) (L88). Opening a card FROM the
-// editor therefore leaves the editor painted ON TOP of the card screen.
-// This probe hit-tests and screenshots the real stacking.
+// vp-CD-6 (adversarial skeptic): "cards reachable from the editor"
+// (CD-6, certification/step1-requirements.md L55). DOM reads don't prove the
+// screen is usable, so this probe hit-tests and screenshots the real stacking.
+//
+// CONTRACT UPDATE (2026-08 triage): this probe was written against the FIXED
+// CSS z-index hierarchy (#scr-card z-index:4 < #scr-editor z-index:5,
+// step1.html L92-93), under which opening a card FROM the editor left the
+// editor painted on top ('.screen.under' keeps visibility:visible,
+// translateX(-26%), L88). The artifact replaced that hierarchy: applyNav()
+// (step1.html L1120-1133) now assigns z-index from the NAVIGATION STACK order —
+//   // stacking must follow the navigation order, not the fixed CSS hierarchy —
+//   // editor→card layers the card above the editor it was opened from
+//   el.style.zIndex = idx > -1 ? String(idx + 1) : '';
+// so the inline style overrides the stylesheet and the card wins.
+// The assertion is therefore inverted to the governing contract: the card
+// screen opened from the editor must be on top, hit-testable, and leavable.
+// Same measurements, same rigour; only the expected sign changed.
 import { chromium } from 'playwright-core';
 import { startServer } from '../serve.mjs';
 
@@ -76,8 +85,22 @@ const occluded = stacking.backHitLandsInEditor || stacking.midHitLandsInEditor;
 console.log('card screen state opened:', stacking.ccBartitle === 'Serane');
 console.log('card screen occluded by editor (hit-test):', occluded);
 console.log('#cc-back clickable:', backClickable);
-console.log('vp-CD6-card-over-editor VERDICT:', occluded || !backClickable ? 'DEFECT CONFIRMED — card screen unusable when opened from the editor' : 'NO DEFECT');
 console.log('pageerrors:', errs.length ? errs : 'none');
+
+const checks = [];
+const ok = (label, cond) => { checks.push(!!cond); console.log((cond ? 'ok  ' : 'FAIL'), label); };
+ok('card opened from the editor route', stacking.ccBartitle === 'Serane' && /\bon\b/.test(stacking.cardClasses));
+ok('editor is left "under" and still painted (the occlusion risk is real)',
+   /\bunder\b/.test(stacking.edClasses) && stacking.edVisibility === 'visible');
+ok('nav-order stacking puts the card above the editor it was opened from',
+   Number(stacking.cardZ) > Number(stacking.edZ));
+ok('card back button hit-tests into the card screen, not the editor',
+   stacking.backHitLandsInCardScreen && !stacking.backHitLandsInEditor);
+ok('card body hit-tests into the card screen, not the editor',
+   stacking.midHitLandsInCardScreen && !stacking.midHitLandsInEditor);
+ok('the user can actually leave the card screen', backClickable);
+ok('no page exceptions', errs.length === 0);
+console.log('vp-CD6-card-over-editor VERDICT:', checks.every(Boolean) ? 'PASS' : 'FAIL');
 
 await browser.close();
 await srv.close();

@@ -1,5 +1,14 @@
-// COVERAGE-CRITIC probe 1: writer vs codex — tongue roster, romanization,
-// glyph-key parity including punctuation/apostrophe/accent material.
+// COVERAGE-CRITIC probe 1 (DIAGNOSTIC — no VERDICT line): writer vs codex —
+// tongue roster, romanization, glyph-key parity including punctuation /
+// apostrophe / accent material. Dumps both sides to the scratchpad as JSON.
+//
+// TRIAGE 2026-08-21: this crashed in the writer-side evaluate before printing
+// any comparison —
+//   page.evaluate: TypeError: Cannot read properties of undefined (reading 'codePointAt')
+// because its __forgeMap projection assumed every forged face is an alphabet
+// with a `gidx` table and an unknown-token `dot`. Celan Basic is deliberately a
+// word script (TX-6c) whose record is {family, base, flow, win, words, order,
+// ttf, auric, codeMap}. Projection widened; nothing else changed.
 import { chromium } from 'playwright-core';
 import { startServer } from '/home/user/MonoFX/tenebrae/certification/harness/serve.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -7,7 +16,17 @@ import http from 'node:http';
 
 // serve the standalone codex too
 const CODEX = '/tmp/claude-0/-home-user-MonoFX/6e76713a-e052-5f67-a07d-369d6ef8c673/scratchpad/codex.html';
-const codexBody = await readFile(CODEX);
+// The codex's own window.CODEX export (codex.html L4674) does NOT include
+// compileText, and compileText is not a global (it lives inside an IIFE — a
+// page.evaluate sees `typeof compileText === "undefined"`; proved by
+// cf-codex-compiletext.mjs). Reading ground truth without it silently fell back
+// to C.coreTranslate, which is the word core and NOT the codex's compiler: it
+// drops the Celan High sentence frame, so this diagnostic reported 12 bogus
+// "mismatches" against a writer that was right. Apply the same mechanical,
+// behaviour-neutral widening the writer applies at import time (step1.html
+// omniPatchHTML, L3581-3585) so both sides read the SAME codex function.
+const codexBody = (await readFile(CODEX, 'utf8')).replace(/window\.CODEX\s*=\s*\{/,
+  'window.CODEX = {compileText:(typeof compileText!=="undefined"?compileText:null), ');
 const csrv = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(codexBody);
@@ -59,7 +78,21 @@ const writer = await page.evaluate(async ({ corpus, ids }) => {
       });
     }
   }
-  out.__forgeMap = Object.fromEntries(Object.entries(window.tenebrae._forge.map() || {}).map(([k, v]) => [k, { family: v.family, base: v.base.toString(16), flow: v.flow, dot: v.dot.codePointAt(0).toString(16), nkeys: Object.keys(v.gidx).length }]));
+  // Celan Basic is a WORD script (TX-6c): the codex gives it no alphabet in
+  // TRANS[].L.script, so its forge record carries {win, words, order, auric}
+  // and has neither `gidx` nor an unknown-token `dot`. Projecting it like an
+  // alphabet threw "Cannot read properties of undefined (reading 'codePointAt')"
+  // and killed this diagnostic before it printed anything.
+  out.__forgeMap = Object.fromEntries(Object.entries(window.tenebrae._forge.map() || {}).map(([k, v]) => [k, {
+    family: v.family,
+    base: (v.base != null ? v.base.toString(16) : null),
+    flow: v.flow,
+    kind: v.auric ? 'word-script' : 'alphabet',
+    dot: (v.dot && v.dot.length) ? v.dot.codePointAt(0).toString(16) : null,
+    nkeys: v.gidx ? Object.keys(v.gidx).length : null,
+    nwords: v.words ? Object.keys(v.words).length : null,
+    ncodes: v.codeMap ? Object.keys(v.codeMap).length : null,
+  }]));
   return out;
 }, { corpus: CORPUS, ids: langs.map(l => l.id) });
 
@@ -81,7 +114,11 @@ const codex = await cpage.evaluate(({ corpus }) => {
     for (const t of corpus) {
       let rom = null, err = null;
       try {
-        const res = (typeof compileText !== 'undefined') ? compileText(T, t, 'e2l') : { parts: C.coreTranslate(T, t, 'e2l'), lines: null };
+        if(!C.compileText) throw new Error('codex compileText not exposed — widening patch failed');
+        const res = C.compileText(T, t, 'e2l');
+        // the codex feeds its typesetter cleanText: compiled lines with the
+        // untranslated parts (p.u) removed (TX-6b). Keep the full romanization
+        // here and record the clean form separately.
         const lines = res.lines || [(res.parts || []).filter(p => !p.drop && p.out).map(p => ({ t: p.out }))];
         rom = lines.map(l => l.map(p => p.t).join(' ')).join(' ');
       } catch (e) { err = String(e); }

@@ -11,6 +11,18 @@
 //
 // The fixture is generated at run time in the scratchpad (font borrowed from
 // the app's own embedded sample pack) — nothing binary is committed.
+//
+// TRIAGE 2026-08-21: the final check asserted that removing the pack "restores
+// the sample engine (7 tongues, badge back, sample rom)". That contract is not
+// merely stale, it is now FORBIDDEN: TX-1 (certification/translation-requirements.md)
+// requires the real Codex Omnilingua — embedded at step1.html L886 — to be the
+// engine on every path including "removal of an imported JSON pack", and the
+// legacy sample cipher may never become the engine again. step1.html L4406-4411
+// implements exactly that (`state.codex = embeddedCodexPack()`, toast "Back to
+// the built-in Codex Omnilingua"). The check now asserts the embedded engine is
+// what comes back, measured against a baseline captured before the import, and
+// through translate2 (the real seam) rather than translate (the legacy sample
+// seam, step1.html L4424).
 // Run: cd probes && node tr-codex-zip.mjs
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -39,6 +51,16 @@ const ZIP = SCRATCH + '/probe-codex-pack.zip';
 
 const { srv, browser, page, errors } = await launch();
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
+
+// baseline: the embedded Codex Omnilingua, before anything is imported
+await page.waitForTimeout(3500);
+const base = await page.evaluate(async () => {
+  const { langs, note } = await window.tenebrae.langs();
+  const roms = {};
+  for (const l of langs) roms[l.id] = (await window.tenebrae.translate2(l.id, 'the stone gate') || {}).romanization;
+  return { ids: langs.map(l => l.id), note, roms };
+});
+console.log('baseline (embedded codex):', JSON.stringify(base));
 
 await page.click('#lib-more');
 await wait(page, 400);
@@ -77,14 +99,24 @@ await page.locator('#sheet .sh-item', { hasText: 'Remove pack' }).click();
 await wait(page, 600);
 await page.click('#cs-yes');
 await wait(page, 1200);
+await page.waitForTimeout(2500); // re-wake + re-forge the embedded engine
 const back = await page.evaluate(async () => {
   const { langs, note } = await window.tenebrae.langs();
-  return { n: langs.length, sampleNote: /sample codex/i.test(note),
-           rom: window.tenebrae.translate('celan-basic', 'the stone gate').romanization };
+  const roms = {};
+  for (const l of langs) roms[l.id] = (await window.tenebrae.translate2(l.id, 'the stone gate') || {}).romanization;
+  return { ids: langs.map(l => l.id), note, roms,
+           legacySeamRom: window.tenebrae.translate('celan-basic', 'the stone gate').romanization };
 });
 console.log('after removal:', JSON.stringify(back));
-checks.push(has('removal restores the sample engine (7 tongues, badge back, sample rom)',
-  back.n === 7 && back.sampleNote && back.rom === 'te petrek purten'));
+const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+checks.push(
+  has('removal restores the EMBEDDED Codex Omnilingua, not the sample cipher (TX-1)',
+      /Codex Omnilingua v\d+/.test(back.note) && !/sample/i.test(back.note)),
+  has('roster and every romanization are byte-identical to the pre-import baseline',
+      same(back.ids, base.ids) && same(back.roms, base.roms)),
+  has('no tongue falls back to the sample cipher output',
+      Object.values(back.roms).every(r => r && r !== back.legacySeamRom)),
+);
 
 console.log('pageerrors:', errors.length ? errors : 'none');
 verdict('TR-5 (zip branch)', checks.every(Boolean) && errors.length === 0);

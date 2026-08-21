@@ -1,19 +1,38 @@
-// TR-5 adversarial — tongue identity across a codex import/remove round trip.
-// OMNI_ALIAS (step1.html L2326) maps sample ids to engine ids one-way:
-// 'celan-high' → 'celan_high', 'rath-speech' → null (silently retargeted to
-// celan_basic by omniTranslate L2397). spanFromResult stores r.lang.id back
-// onto the span (L2489), so after codex removal makeTSpan gets an id the
-// sample codex doesn't know ('celan_high') and codexLang (L2225-2228) falls
-// back to languages[0] — celan-basic. Source text survives; the chosen tongue
-// does not. This probe demonstrates the degradation end to end.
+// TX-9 / TX-1 adversarial — tongue identity across a codex import/remove round trip.
+//
+// TRIAGE 2026-08-21 — this probe was written against a contract the artifact
+// deliberately replaced, and it CRASHED before asserting anything:
+//   locator.click: Timeout 30000ms exceeded.
+//     - waiting for locator('#sheet .sh-item').filter({ hasText: 'Rath-Speech' })
+// Two reasons it is stale:
+//   (a) Rath-Speech no longer exists as a translatable tongue. The codex marks
+//       it dead ("Rath-Speech †", codex.html L413), its <section
+//       id="lang-rath_speech"> is empty (codex.html L731) and buildLang
+//       registers no TRANS core for it, so the codex's own roster is six
+//       tongues; OMNI_ALIAS maps 'rath-speech' → null (step1.html L3574).
+//   (b) The degradation it was written to demonstrate — codex removal dropping
+//       a span onto the sample cipher's languages[0] — cannot happen any more.
+//       TX-1 requires the embedded Codex Omnilingua to be the engine on every
+//       path including "removal of an imported codex", and removeOmniPack
+//       (step1.html L4365-4373) restores embeddedCodexPack() and re-renders
+//       every span. So the round trip is now a REQUIREMENT (TX-9: "spans
+//       created before a codex import re-render after it; a span never degrades
+//       to Latin text"), not an anomaly note, and the verdict gates on it.
+//
+// The trip: two spans in two different flows (Celan High = cols-rtl, Kerrackian
+// = rtl) made under the embedded engine → import the real codex HTML through the
+// library menu → remove it → assert tongue, romanization AND the forged PUA
+// script run are byte-identical at every stage, with no Latin fallback.
 // Run: cd probes && node tr-alias-roundtrip.mjs
 import { launch, wait, createBook, insertTranslationSpan, verdict } from './ex-lib.mjs';
 
 const CODEX = '/tmp/claude-0/-home-user-MonoFX/6e76713a-e052-5f67-a07d-369d6ef8c673/scratchpad/codex.html';
+const PUA = /[-]/;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const { srv, browser, page, errors } = await launch();
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };
 
+await wait(page, 3500); // engine wake + forge
 await createBook(page, 'Alias Book');
 await page.click('#ed-content');
 await page.keyboard.type('opening line');
@@ -21,62 +40,89 @@ await page.keyboard.press('Enter');
 await page.keyboard.type('the sea remembers and the old king waits');
 await wait(page, 300);
 await insertTranslationSpan(page, 'sea remembers', 'Celan High');
-await insertTranslationSpan(page, 'old king', 'Rath-Speech');
+await insertTranslationSpan(page, 'old king', 'Kerrackian');
+
 const snap = () => page.evaluate(() =>
-  [...document.querySelectorAll('#ed-content .tspan')].map(t =>
-    ({ src: t.dataset.src, lang: t.dataset.lang, rom: t.dataset.rom })));
+  [...document.querySelectorAll('#ed-content .tspan')].map(t => ({
+    src: t.dataset.src, lang: t.dataset.lang, rom: t.dataset.rom,
+    flow: t.dataset.flow || 'ltr', dir: t.getAttribute('dir') || '',
+    scr: t.dataset.scr || '', text: t.textContent,
+  })));
+const engine = () => page.evaluate(() => window.tenebrae.langs().then(x => ({ n: x.langs.length, note: x.note })));
+
 const before = await snap();
 console.log('before import:', JSON.stringify(before));
+console.log('engine before:', JSON.stringify(await engine()));
 await wait(page, 1500);
 await page.click('#ed-back'); await wait(page, 400);
 await page.click('#bk-back'); await wait(page, 400);
 
-// import the real codex through the UI
+// import the real codex file through the UI
 await page.click('#lib-more'); await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
-await wait(page, 900);
+await wait(page, 1200);
 const [chooser] = await Promise.all([
   page.waitForEvent('filechooser', { timeout: 15000 }),
   page.locator('#sheet .sh-item', { hasText: 'Import Codex' }).click(),
 ]);
 await chooser.setFiles(CODEX);
-await sleep(8000);
+await sleep(10000);
 console.log('toast:', await page.evaluate(() => document.querySelector('#toast').textContent));
 await page.locator('#lib-list .row', { hasText: 'Alias Book' }).click();
 await wait(page, 500);
 await page.locator('#bk-list .row[data-scene]').first().click();
-await wait(page, 1000);
+await wait(page, 2500);
 const under = await snap();
-console.log('under codex:', JSON.stringify(under));
+console.log('under imported codex:', JSON.stringify(under));
 await page.click('#ed-back'); await wait(page, 400);
 await page.click('#bk-back'); await wait(page, 400);
 
-// remove the codex
+// remove the imported codex → must fall back to the EMBEDDED codex (TX-1)
 await page.click('#lib-more'); await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
-await wait(page, 1200);
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await wait(page, 2000);
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 700);
 await page.click('#cs-yes');
-await wait(page, 1500);
+await wait(page, 3000);
+const engAfter = await engine();
+console.log('engine after removal:', JSON.stringify(engAfter));
 await page.locator('#lib-list .row', { hasText: 'Alias Book' }).click();
 await wait(page, 500);
 await page.locator('#bk-list .row[data-scene]').first().click();
-await wait(page, 800);
+await wait(page, 2500);
 const after = await snap();
 console.log('after removal:', JSON.stringify(after));
 
-const hi = { b: before.find(s => s.src === 'sea remembers'), a: after.find(s => s.src === 'sea remembers') };
-const ra = { b: before.find(s => s.src === 'old king'), a: after.find(s => s.src === 'old king') };
-has('source text preserved on both spans', !!hi.a && !!ra.a && hi.a.src === 'sea remembers' && ra.a.src === 'old king');
-const hiKept = hi.a && hi.a.lang === hi.b.lang && hi.a.rom === hi.b.rom;
-const raKept = ra.a && ra.a.lang === ra.b.lang && ra.a.rom === ra.b.rom;
-has('Celan High span keeps its tongue across the round trip', hiKept);
-has('Rath-Speech span keeps its tongue across the round trip', raKept);
-if (!hiKept) console.log(`DEGRADED: celan-high -> ${under.find(s => s.src === 'sea remembers').lang} -> ${hi.a.lang} (rom "${hi.b.rom}" -> "${hi.a.rom}")`);
-if (!raKept) console.log(`DEGRADED: rath-speech -> ${under.find(s => s.src === 'old king').lang} -> ${ra.a.lang} (rom "${ra.b.rom}" -> "${ra.a.rom}")`);
+const find = (arr, s) => arr.find(x => x.src === s);
+const eq = (a, b) => a && b && a.lang === b.lang && a.rom === b.rom && a.flow === b.flow &&
+                     a.dir === b.dir && a.scr === b.scr && a.text === b.text;
+const hi = { b: find(before, 'sea remembers'), u: find(under, 'sea remembers'), a: find(after, 'sea remembers') };
+const ke = { b: find(before, 'old king'), u: find(under, 'old king'), a: find(after, 'old king') };
+
+const checks = [
+  has('both spans exist at all three stages',
+      [hi.b, hi.u, hi.a, ke.b, ke.u, ke.a].every(Boolean)),
+  has('spans were forged as real script to begin with (PUA, not Latin)',
+      PUA.test(hi.b.scr) && PUA.test(ke.b.scr) && hi.b.scr === hi.b.text && ke.b.scr === ke.b.text),
+  // dir="rtl" belongs to the horizontal rtl tongue alone (TX-6): Celan High is
+  // cols-rtl and must NOT carry it, or the column stands on its head.
+  has('flows are the codex flows (Celan High cols-rtl with no dir attr; Kerrackian rtl + dir="rtl")',
+      hi.b.flow === 'cols-rtl' && hi.b.dir === '' && ke.b.flow === 'rtl' && ke.b.dir === 'rtl'),
+  has('Celan High span survives the import unchanged', eq(hi.b, hi.u)),
+  has('Kerrackian span survives the import unchanged', eq(ke.b, ke.u)),
+  has('Celan High span survives the removal unchanged', eq(hi.b, hi.a)),
+  has('Kerrackian span survives the removal unchanged', eq(ke.b, ke.a)),
+  has('no span degrades to Latin at any stage (TX-9)',
+      [hi.u, hi.a, ke.u, ke.a].every(s => PUA.test(s.text) && s.text !== s.rom && s.text !== s.src)),
+  has('removal lands on the embedded Codex Omnilingua, never the sample cipher (TX-1)',
+      engAfter.n === 6 && /Codex Omnilingua v\d+/.test(engAfter.note) && !/sample/i.test(engAfter.note)),
+];
+for (const [n, o] of [['celan_high', hi], ['kerrackian', ke]])
+  if (!eq(o.b, o.a)) console.log(`DEGRADED ${n}: ${JSON.stringify(o.b)} -> ${JSON.stringify(o.u)} -> ${JSON.stringify(o.a)}`);
+
 console.log('pageerrors:', errors.length ? errors : 'none');
-verdict('tongue identity round-trips (anomaly check, not a TR-5 gate)', hiKept && raKept);
+verdict('TX-9 / TX-1 codex round trip', checks.every(Boolean) && errors.length === 0);
 
 await browser.close();
 await srv.close();

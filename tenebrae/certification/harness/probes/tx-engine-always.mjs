@@ -5,7 +5,7 @@
 //   B failed engine wake      import an HTML file that passes the codex sniff
 //                             but never defines the globals (real 30s wake
 //                             timeout, real toast, real recovery sheet)
-//   C removal of an imported codex        (real codex.html -> Remove codex)
+//   C removal of an imported codex        (real codex.html -> Remove imported codex)
 //   D removal of an imported JSON pack    (Codex Pack -> Remove pack)
 //   E restore from backup     e1 the app's own backup (control)
 //                             e2 a backup whose state carries no codex
@@ -181,7 +181,7 @@ await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 900);
 const deadSheetLabels = await page.evaluate(() => [...document.querySelectorAll('#sheet .sh-item .lbl')].map(n => n.textContent));
 console.log('[B] failed-wake sheet items:', JSON.stringify(deadSheetLabels));
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 500);
 await page.click('#cs-yes');
 await wait(page, 4000);
@@ -217,7 +217,7 @@ await page.click('#lib-more');
 await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 600);
 await page.click('#cs-yes');
 await wait(page, 4500);

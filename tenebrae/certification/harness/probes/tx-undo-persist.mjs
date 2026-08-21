@@ -233,7 +233,7 @@ await page.click('#bk-back'); await wait(page, 500);
 await page.click('#lib-more'); await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 800);
 await page.click('#cs-yes');            // confirmSheet: "Remove"
 await page.waitForFunction(() => /built-in Codex Omnilingua/.test(document.querySelector('#toast').textContent), null, { timeout: 40000 });

@@ -35,10 +35,21 @@ await insertTranslationSpan(page, 'harbor sleeps', 'Celan Basic');
 await insertTranslationSpan(page, 'anchor holds', 'Celan Basic');
 
 console.log('editor DOM:', await page.evaluate(() => document.querySelector('#ed-content').innerHTML));
-const roms = await page.evaluate(() => ({
-  r1: window.tenebrae.translate('celan-basic', 'harbor sleeps').romanization,
-  r2: window.tenebrae.translate('celan-basic', 'anchor holds').romanization,
+// 2026-08 TRIAGE (stale-probe fix, TX-1): expectations must come from the REAL
+// engine seam window.tenebrae.translate2 (resolveTranslate → embedded Codex
+// Omnilingua). window.tenebrae.translate is the legacy sample cipher and
+// answered "purtus durmenin"/"enkhes tenenin" where the app writes
+// "harbora dorma"/"ancora tena", so both romanization checks (including the
+// CONTROL line) missed against an engine that is not under test.
+const roms = await page.evaluate(async () => ({
+  r1: (await window.tenebrae.translate2('celan_basic', 'harbor sleeps')).romanization,
+  r2: (await window.tenebrae.translate2('celan_basic', 'anchor holds')).romanization,
 }));
+// the spans themselves must carry script, not Latin (TX-9 / X2-14): dump the
+// data-scr codepoints, which are invisible in a terminal.
+console.log('span data-scr codepoints:', JSON.stringify(await page.evaluate(() =>
+  [...document.querySelectorAll('#ed-content .tspan')].map(t =>
+    [...(t.dataset.scr || '')].map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(' ')))));
 console.log('expected romanizations:', JSON.stringify(roms));
 
 await wait(page, 1500);

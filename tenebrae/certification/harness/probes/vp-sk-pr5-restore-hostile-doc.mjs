@@ -71,4 +71,37 @@ const res = await page.evaluate(() => ({
 console.log('img onerror executed:', res.pwnImg, '| script executed:', res.pwnScript);
 console.log('editor DOM:', JSON.stringify(res.edHTML));
 
-// after the editor deb
+// after the editor debounce, what does the scene doc in IndexedDB hold?
+await page.waitForTimeout(1600);
+const stored = await page.evaluate(() => new Promise(res => {
+  const rq = indexedDB.open('tenebrae-writer', 1);
+  rq.onsuccess = () => {
+    const g = rq.result.transaction('kv', 'readonly').objectStore('kv').get('state');
+    g.onsuccess = () => {
+      const st = g.result;
+      const sc = st && st.books && st.books[0] && st.books[0].chapters[0] && st.books[0].chapters[0].scenes[0];
+      rq.result.close(); res(sc ? sc.doc : null);
+    };
+    g.onerror = () => { rq.result.close(); res('IDB-READ-ERROR'); };
+  };
+  rq.onerror = () => res('IDB-OPEN-ERROR');
+}));
+console.log('scene doc in IDB after the editor touched it:', JSON.stringify(stored));
+console.log('pageerrors:', errors.length ? errors : 'none');
+
+// Contract: ED-6 (certification/step1-requirements.md L37) — "foreign/pasted
+// HTML is normalized to the app's schema; no script/style survives into a
+// scene doc" — and PR-5 (L46) restore, which adopts a foreign state object.
+// A backup file is foreign input; its scene docs are foreign HTML.
+const checks = [];
+const ok = (label, cond) => { checks.push(!!cond); console.log((cond ? 'ok  ' : 'FAIL'), label); };
+ok('restore actually ran (control: the hostile book is in the library)', /Hostile Restore/.test(lib));
+ok('the prose itself survived the restore (control)', /before/.test(res.edHTML) && /after/.test(res.edHTML));
+ok('no img onerror executed from a restored scene doc', res.pwnImg === null);
+ok('no <script> element survived into the opened scene DOM', !/<script/i.test(res.edHTML));
+ok('no inline event handler survived into the opened scene DOM', !/\son[a-z]+\s*=/i.test(res.edHTML));
+ok('no script executed from a restored scene doc', res.pwnScript === null);
+console.log('vp-sk-PR5-restore-hostile-doc VERDICT:', checks.every(Boolean) ? 'PASS' : 'FAIL');
+
+await browser.close();
+await srv.close();

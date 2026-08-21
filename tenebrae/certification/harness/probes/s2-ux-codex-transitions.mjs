@@ -1,10 +1,11 @@
-// X2-14 (gap coverage): sample -> imported codex -> removal transitions.
+// X2-14 (gap coverage): embedded -> imported codex -> removal transitions.
 // The same two prose spans must stay TEXT (zero svg) with the CORRECT script
 // font actually drawing real glyphs at every stage:
-//   1. sample codex  — sample PUA + embedded sample TTFs
-//   2. imported codex — re-rendered as omni spans, forged-TTF PUA, data-scr
-//   3. codex removed — re-rendered back to sample tongues, sample PUA again,
-//      no data-omni leftovers (an orphaned omni span would be fontless tofu)
+//   1. embedded codex — the engine from boot, forged-TTF PUA, data-scr
+//   2. imported codex — re-rendered under the imported one, still forged text
+//   3. import removed — re-rendered under the EMBEDDED codex again. TX-1: the
+//      legacy sample cipher may never become the engine on this path, so the
+//      spans must still be omni spans, never sample ones and never Latin.
 // Canvas distinctness is the glyph proof; stored docs are checked for '<svg'.
 // Run: cd probes && node s2-ux-codex-transitions.mjs
 import { launch, wait, createBook, insertTranslationSpan, verdict } from './ex-lib.mjs';
@@ -50,7 +51,8 @@ const backToLibrary = async () => {
 };
 const glyphOK = s => s.svg === 0 && s.puaCount >= 2 && s.samples >= 2 && s.distinct >= 2 && !!s.src;
 
-// ---- stage 1: sample codex ----
+// ---- stage 1: the embedded codex, which is the engine from boot ----
+await wait(page, 3500);
 await createBook(page, 'Transition Book');
 await page.click('#ed-content');
 await page.keyboard.type('padding opener line');
@@ -62,8 +64,9 @@ await insertTranslationSpan(page, 'fallen king', 'Kerrackian');
 await wait(page, 1500);
 const st1 = await inspectSpans();
 console.log('stage 1 (sample):', JSON.stringify(st1, null, 1));
-ck('stage 1: two sample spans, text + real distinct glyphs', st1.length === 2 && st1.every(glyphOK), JSON.stringify(st1.map(s => `${s.lang}:${s.distinct}/${s.samples}`)));
-ck('stage 1: sample script fonts drawing', st1.some(s => s.family === 'Tenebrae Celan Runes') && st1.some(s => s.family === 'Tenebrae Fallen Script'), JSON.stringify(st1.map(s => s.family)));
+ck('stage 1: two spans, text + real distinct glyphs', st1.length === 2 && st1.every(glyphOK), JSON.stringify(st1.map(s => `${s.lang}:${s.distinct}/${s.samples}`)));
+ck('stage 1: forged codex fonts drawing from boot', st1.every(s => /^Tenebrae (Omni|Auric) /.test(s.family)), JSON.stringify(st1.map(s => s.family)));
+ck('stage 1: they are codex spans, not sample ones', st1.every(s => s.omni === '1'), JSON.stringify(st1.map(s => s.omni)));
 const doc1 = await sceneDocProbe();
 ck('stage 1: stored doc holds text spans, no svg', typeof doc1 === 'string' && doc1.includes('tspan') && !doc1.includes('<svg'));
 
@@ -89,7 +92,7 @@ console.log('stage 2 (imported codex):', JSON.stringify(st2, null, 1));
 ck('stage 2: both spans re-rendered as omni TEXT spans, sources kept',
    st2.length === 2 && st2.every(s => s.omni === '1' && s.textIsScr === true && s.svg === 0) &&
    st2.map(s => s.src).sort().join('|') === 'fallen king|sea remembers');
-ck('stage 2: forged/celan fonts draw real distinct glyphs', st2.every(s => glyphOK(s) && /^Tenebrae (Omni|Celan Runes)/.test(s.family)),
+ck('stage 2: forged fonts draw real distinct glyphs', st2.every(s => glyphOK(s) && /^Tenebrae (Omni|Auric) /.test(s.family)),
    JSON.stringify(st2.map(s => `${s.family}:${s.distinct}/${s.samples}`)));
 const doc2 = await sceneDocProbe();
 ck('stage 2: stored doc still svg-free', typeof doc2 === 'string' && !doc2.includes('<svg'));
@@ -99,18 +102,21 @@ await backToLibrary();
 await page.click('#lib-more'); await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 900);
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 600);
 await page.click('#cs-yes');
-await page.waitForFunction(() => /Back to the sample codex/.test(document.querySelector('#toast').textContent), null, { timeout: 20000 });
+await page.waitForFunction(() => /built-in Codex Omnilingua/.test(document.querySelector('#toast').textContent), null, { timeout: 20000 });
 await wait(page, 600);
 await reopenScene('Transition Book');
 await wait(page, 800);
 const st3 = await inspectSpans();
 console.log('stage 3 (codex removed):', JSON.stringify(st3, null, 1));
 ck('stage 3: two spans survive removal with sources kept', st3.length === 2 && st3.map(s => s.src).sort().join('|') === 'fallen king|sea remembers');
-ck('stage 3: no orphaned omni spans (would be fontless)', st3.every(s => s.omni === null && s.scr === null), JSON.stringify(st3.map(s => s.omni)));
-ck('stage 3: spans are sample TEXT script again, real distinct glyphs', st3.every(s => glyphOK(s) && /^Tenebrae /.test(s.family)),
+// TX-1: removal falls back to the codex embedded in this file, never to the
+// legacy sample cipher, so these stay codex spans with forged faces
+ck('stage 3: spans are still CODEX spans, never downgraded to the sample', st3.every(s => s.omni === '1' && !!s.scr),
+   JSON.stringify(st3.map(s => `${s.lang}:omni=${s.omni}`)));
+ck('stage 3: forged TEXT script again, real distinct glyphs', st3.every(s => glyphOK(s) && /^Tenebrae (Omni|Auric) /.test(s.family)),
    JSON.stringify(st3.map(s => `${s.lang}:${s.family}:${s.distinct}/${s.samples}`)));
 const doc3 = await sceneDocProbe();
 ck('stage 3: stored doc svg-free and holds both spans', typeof doc3 === 'string' && !doc3.includes('<svg') && (doc3.match(/class="tspan"/g) || []).length === 2);

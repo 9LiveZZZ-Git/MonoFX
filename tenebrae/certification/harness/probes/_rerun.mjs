@@ -1,0 +1,21 @@
+import { writeFile, appendFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+const OUT='/tmp/claude-0/-home-user-MonoFX/6e76713a-e052-5f67-a07d-369d6ef8c673/scratchpad/rerun.jsonl';
+await writeFile(OUT,'');
+const list = process.argv.slice(2);
+let i=0, done=0;
+const run = n => new Promise(res => {
+  const p = spawn('node',[n]); let out='';
+  const k=setTimeout(()=>{try{p.kill('SIGKILL')}catch(e){}}, 13*60*1000);
+  p.stdout.on('data',d=>{out+=d; if(out.length>300000) out=out.slice(-150000);});
+  p.stderr.on('data',d=>{out+=d; if(out.length>300000) out=out.slice(-150000);});
+  p.on('close', async c=>{ clearTimeout(k);
+    const m=out.match(/^(.*)VERDICT:\s*(PASS|FAIL)\b/mi);
+    const fails=(out.match(/^\s*FAIL\b.*$/gmi)||[]).slice(0,8).map(s=>s.trim().slice(0,220));
+    const tail = out.trim().split('\n').slice(-4).join(' | ').slice(0,300);
+    await appendFile(OUT, JSON.stringify({name:n, code:c, verdict: m?m[2].toUpperCase():(/VERDICT/i.test(out)?'UNKNOWN':'NONE'), fails, tail, crashed: c!==0 && !m})+'\n');
+    done++; console.log(`[${done}/${list.length}] ${n.padEnd(34)} ${m?m[2].toUpperCase():'NONE'}${c!==0&&!m?' (crash)':''}`);
+    res(); });
+});
+const w = Array.from({length:3}, async()=>{ while(i<list.length) await run(list[i++]); });
+await Promise.all(w); console.log('RERUN COMPLETE');

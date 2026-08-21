@@ -286,7 +286,7 @@ checks.push(has('[C] real-engine translation identical across reload (all tongue
 await page.click('#lib-more'); await wait(page, 400);
 await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
-await page.locator('#sheet .sh-item', { hasText: 'Remove codex' }).click();
+await page.locator('#sheet .sh-item', { hasText: 'Remove imported codex' }).click();
 await wait(page, 700);
 await page.click('#cs-yes');
 await wait(page, 1500);

@@ -1,13 +1,22 @@
 // vf-PR-4 — adversarial extension of the offline check to the codex-import
-// flow, which st-offline-network.mjs never exercised. The real codex HTML
-// (tenebraecodex_14.html, 3.4MB, in the session uploads) contains
+// flow. The real codex HTML (3.4MB) contains
 //   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono...')
-// and the app hosts an imported codex in <iframe sandbox="allow-scripts
-// allow-same-origin"> via srcdoc (step1.html L2316-2336) — a sandbox that
-// does NOT restrict network. If the iframe fetches the @import, the app
-// issues an external runtime request during an advertised first-party flow.
-// All requests are recorded AND aborted-if-external (we never actually phone
-// out). Also logs the wake toast + timing as TR-5 budget corroboration.
+// and the app hosts an imported codex in a srcdoc iframe (step1.html
+// L3600-3634) — a host that does NOT restrict network by itself. If the iframe
+// fetched the @import, the app would issue an external runtime request during
+// an advertised first-party flow.
+//
+// The interception here is the assertion: context.route('**/*') sits on the
+// network stack, so anything that reaches it has escaped the renderer. The CSP
+// injected by omniPatchHTML (step1.html L3578-3585, default-src 'none';
+// style-src 'unsafe-inline') kills the @import BEFORE the network stack, so a
+// correct app produces ZERO external route hits. (Passive page.on('request')
+// still reports the CSP-killed attempt — see vp-pr4-csp-blocked.mjs and
+// cf-pr4-boot-wire.mjs, which pin the failure reason to 'csp' with zero
+// responses. Both views agree: nothing reaches the wire.)
+// External requests are also aborted, so we never actually phone out.
+// Also logs the wake toast + timing as TR-5 budget corroboration.
+// Verdict line is machine-readable PASS/FAIL for the suite runner.
 // Run: cd probes && node vf-pr4-codex-network.mjs
 import { chromium } from 'playwright-core';
 import { startServer } from '../serve.mjs';
@@ -61,10 +70,15 @@ console.log('total requests:', requests.length);
 console.log('external request attempts:', external.length ? external : 'none');
 console.log('pageerrors:', errors.length ? errors : 'none');
 
-const offline = external.length === 0;
-console.log('vf-PR-4 (codex-import flow) VERDICT:', offline
-  ? 'PASS — no external requests even while hosting the imported codex'
-  : 'FAIL — the codex-import flow attempts external requests: ' + external.join(', '));
+const checks = [];
+const ok = (l, c) => { checks.push(!!c); console.log((c ? 'ok  ' : 'FAIL'), l); };
+ok('the codex engine actually woke (we are not proving offline by proving nothing ran)',
+   /tongues awake/i.test(toast));
+ok('ZERO external requests reached the network stack while hosting the imported codex',
+   external.length === 0);
+ok('no page exceptions', errors.length === 0);
+if (external.length) console.log('escaped to the wire:', external.join(', '));
+console.log('vf-PR-4 (codex-import flow) VERDICT:', checks.every(Boolean) ? 'PASS' : 'FAIL');
 
 await browser.close();
 await srv.close();

@@ -71,7 +71,19 @@ const res = await page.evaluate(async () => {
   const iou = (a, b) => { let i = 0, u = 0; for (let k = 0; k < a.length; k++) { if (a[k] & b[k]) i++; if (a[k] | b[k]) u++; } return u ? i / u : 0; };
 
   const out = [];
+  const skipped = [];
   for (const [langId, f] of Object.entries(F)) {
+    // 2026-08 TRIAGE (stale-probe fix, TX-6c): the forge map also holds the
+    // WORD script, Celan Basic, which the codex gives no alphabet in
+    // TRANS[].L.script (it is not a key of C.TRANS at all — omniLangs() pushes
+    // it by hand before iterating TRANS). Reading C.TRANS[langId].L on it threw
+    // "Cannot read properties of undefined (reading 'L')" and crashed the whole
+    // probe before a single alphabet was checked. Its runes are carved per WORD
+    // by composeWord and its geometry parity is capsule-per-segment, a
+    // different proof — tx-vp-celan-basic-script.mjs owns it. Skip it here, but
+    // only after PROVING it is that tongue (auric word-forge + no TRANS entry),
+    // so a genuinely missing alphabet still fails.
+    if (!C.TRANS[langId]) { skipped.push({ langId, auric: !!f.auric, hasWords: !!f.words, hasMatcher: !!f.matcher }); continue; }
     const T = C.TRANS[langId], sc = T.L.script;
     const flow = C.scriptDir(sc);
     const vertical = flow === 'cols-rtl' || flow === 'btt-stave';
@@ -154,12 +166,16 @@ const res = await page.evaluate(async () => {
     rec.dot = db ? { w: db.w, h: db.h, rEm: +(db.w / 2 / S).toFixed(4), codexREm: 0.03 } : null;
     out.push(rec);
   }
-  return { out };
+  return { out, skipped };
 });
 
 if (res.fatal) { console.log('FATAL:', res.fatal); await browser.close(); await srv.close(); process.exit(1); }
 
 let allOK = true;
+// the only tongue allowed to sit out the alphabet comparison is the word script
+console.log('skipped (word scripts, no alphabet in TRANS[].L.script):', JSON.stringify(res.skipped));
+const skipOK = (res.skipped || []).every(s => s.langId === 'celan_basic' && s.auric === true && s.hasWords === true && s.hasMatcher === false);
+if (!skipOK) { allOK = false; console.log('FAIL a forged tongue has no codex alphabet and is not the Auric word script'); }
 for (const r of res.out) {
   console.log(`\n${r.name} [${r.flow}] n=${r.n} fontLoaded=${r.fontLoaded}`);
   console.log(`   shape: mean IoU ${r.meanShapeIoU}  min ${r.minShapeIoU} ("${r.minShapeKey}")`);

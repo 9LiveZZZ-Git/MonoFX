@@ -1,9 +1,23 @@
 // X2-14 (gap coverage): the tongue sheet's BIG RENDER (tap a span -> action
 // sheet headline) must be script TEXT, no SVG, drawn by the real script font —
-// under BOTH engines. Canvas pixel proof: distinct PUA chars must draw
+// both at BOOT (the embedded Codex Omnilingua, no import step) and after an
+// explicit codex import. Canvas pixel proof: distinct PUA chars must draw
 // distinct glyphs in the big render's computed font (identical images = tofu,
 // i.e. the font never applied). Vertical tongues must carry data-flow +
 // writing-mode inside the sheet too.
+//
+// 2026-08 TRIAGE (stale-probe fix, TX-1 + TX-6c): stage 1 used to assert the
+// SAMPLE codex's Latin-era face 'Tenebrae Celan Runes' for a boot-time Celan
+// Basic span. That contract is gone: the real codex is the engine from first
+// launch (TX-1), and Celan Basic's Auric runes are FORGED per word by the
+// codex's own composeWord under the family 'Tenebrae Auric Runes'
+// (step1.html:3270 — `omniForged.celan_basic = { family: 'Tenebrae Auric
+// Runes', ... }`); 'Tenebrae Celan Runes' now survives only as the
+// !omniForged.celan_basic fallback rule (step1.html:2543, 3362, 4186).
+// Observed: family "Tenebrae Auric Runes", data-omni="1", 100% PUA, 2/2
+// distinct canvas glyphs. The stage-1 check now names the forged face AND
+// demands data-omni="1", i.e. that no import was needed to get the real
+// engine — a strictly stronger assertion than the one it replaces.
 // Run: cd probes && node s2-ux-sheet-bigrender.mjs
 import { launch, wait, createBook, insertTranslationSpan, verdict } from './ex-lib.mjs';
 
@@ -47,7 +61,7 @@ async function inspectSheet(spanIndex){
   return info;
 }
 
-// ---- stage 1: sample codex ----
+// ---- stage 1: boot state — the embedded Codex Omnilingua, no import ----
 await createBook(page, 'Sheet Render Book');
 await page.click('#ed-content');
 await page.keyboard.type('padding opener line');
@@ -57,13 +71,14 @@ await wait(page, 800);
 await insertTranslationSpan(page, 'sea remembers', 'Celan Basic');
 await wait(page, 1200);
 const s1 = await inspectSheet(0);
-console.log('sample sheet render:', JSON.stringify(s1));
-ck('sample: big render exists and is TEXT (zero svg)', !!s1 && s1.svg === 0 && s1.textLen > 0);
-ck('sample: big render is the script itself (>=90% PUA)', !!s1 && s1.puaShare >= 0.9, s1 && `pua ${Math.round(s1.puaShare * 100)}%`);
-ck('sample: script font applies (family + coverage)', !!s1 && /Tenebrae Celan Runes/.test(s1.family) && s1.fontCovers, s1 && s1.family);
-ck('sample: canvas draws distinct real glyphs, not tofu', !!s1 && s1.drawnSamples >= 2 && s1.drawnDistinct >= 2, s1 && `${s1.drawnDistinct}/${s1.drawnSamples} distinct`);
+console.log('boot sheet render:', JSON.stringify(s1));
+ck('boot: big render exists and is TEXT (zero svg)', !!s1 && s1.svg === 0 && s1.textLen > 0);
+ck('boot: big render is the script itself (>=90% PUA)', !!s1 && s1.puaShare >= 0.9, s1 && `pua ${Math.round(s1.puaShare * 100)}%`);
+ck('boot: the REAL engine served this span with no import (data-omni=1)', !!s1 && s1.dataOmni === '1', s1 && `data-omni=${s1.dataOmni}`);
+ck('boot: forged Auric face applies (family + coverage)', !!s1 && /Tenebrae Auric Runes/.test(s1.family) && s1.fontCovers, s1 && s1.family);
+ck('boot: canvas draws distinct real glyphs, not tofu', !!s1 && s1.drawnSamples >= 2 && s1.drawnDistinct >= 2, s1 && `${s1.drawnDistinct}/${s1.drawnSamples} distinct`);
 
-// ---- stage 2: imported codex ----
+// ---- stage 2: after an explicit codex import ----
 await page.click('#ed-back'); await wait(page, 500);
 await page.click('#bk-back'); await wait(page, 500);
 await page.click('#lib-more'); await wait(page, 400);

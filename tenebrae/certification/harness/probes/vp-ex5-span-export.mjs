@@ -26,10 +26,16 @@ await insertTranslationSpan(page, 'dark harbor', 'Kerrackian');
 
 const langs = (await page.evaluate(() => window.tenebrae.langs())).langs;
 const idOf = label => (langs.find(l => l.name === label) || {}).id;
-const roms = await page.evaluate(([a, b]) => ({
-  celan: window.tenebrae.translate(a, 'sea remembers').romanization,
-  kerr: window.tenebrae.translate(b, 'dark harbor').romanization,
-}), [idOf('Celan Basic') || 'celan-basic', idOf('Kerrackian') || 'kerrackian']);
+// 2026-08 TRIAGE (stale-probe fix, TX-1): the expected romanizations must come
+// from the REAL engine seam window.tenebrae.translate2 (resolveTranslate → the
+// embedded Codex Omnilingua). The old window.tenebrae.translate seam is the
+// legacy sample cipher and returned "meres memnerin" / "umbral portush" where
+// the app (correctly) writes "mara memora" / "ulzum lonquqrel", so every
+// romanization check missed against an engine that is not under test.
+const roms = await page.evaluate(async ([a, b]) => ({
+  celan: (await window.tenebrae.translate2(a, 'sea remembers')).romanization,
+  kerr: (await window.tenebrae.translate2(b, 'dark harbor')).romanization,
+}), [idOf('Celan Basic') || 'celan_basic', idOf('Kerrackian') || 'kerrackian']);
 console.log('engine romanizations:', JSON.stringify(roms));
 
 const spans = await page.evaluate(() =>

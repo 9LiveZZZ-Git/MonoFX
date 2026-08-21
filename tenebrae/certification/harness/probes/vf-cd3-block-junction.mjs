@@ -1,10 +1,20 @@
 // vf-CD-3 — adversarial verification of the block-junction under-count claim.
-// buildMentions (step1.html L2969) extracts scene text via plainOfHTML (L3434-3438),
-// which uses bare template textContent: adjacent blocks concatenate with NO
-// separator. Claim under test: a block that ENDS with the card name followed by a
-// block that STARTS with a letter merges ("...saw Kael" + "Then..." ->
-// "saw KaelThen"), so the trailing lookahead (?![\p{L}\p{N}]) rejects a real
-// mention deterministically.
+//
+// CONTRACT UPDATE (2026-08 triage): the defect this probe was written to
+// substantiate has been FIXED. plainOfHTML (step1.html L5318-5328) now injects
+// a space either side of every block element before reading textContent:
+//   // textContent has no block separators — 'KaelHe' at a block junction would
+//   // hide a mention from the word-boundary scan
+//   t.content.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,br')
+//     .forEach(b => { b.before(...' '); b.after(...' '); });
+// so the governing contract, CD-3 (certification/step1-requirements.md L53,
+// "card title + aliases scanned across every scene (word-boundary,
+// case-insensitive)"), now holds at block junctions.
+//
+// The probe keeps every original measurement — including the demonstration
+// that BARE textContent still merges 'KaelHe'/'KaelThen', which is what makes
+// the separator injection load-bearing rather than cosmetic — and asserts the
+// app's own mention count is the correct 3, stable across a reload.
 //
 // Scene built through the real UI (keyboard + Aa format bar):
 //   <h2>Kael</h2>                      <- realistic trigger: heading = bare name
@@ -13,7 +23,7 @@
 //   <p>Then he ran fast.</p>
 //   <p>Later Kael returned home.</p>   <- control: mid-paragraph, must count
 //
-// Correct count: 3 mentions. Defect prediction: 1 mention (heading + junction lost).
+// Correct count: 3 mentions. (Pre-fix behaviour was 1: heading + junction lost.)
 // Run: cd probes && node vf-cd3-block-junction.mjs
 import { chromium } from 'playwright-core';
 import { startServer } from '../serve.mjs';
@@ -132,16 +142,20 @@ console.log('APP mention count after reload:', JSON.stringify(mcount2));
 
 const expected = 3; // heading Kael + "saw Kael" + "Later Kael"
 const appN = parseInt(mcount, 10) || 0;
+const appN2 = parseInt(mcount2, 10) || 0;
 console.log('---');
 console.log('expected (correct extraction):', expected, '| app reports:', appN);
-if (appN < expected && ev.junctionMerged) {
-  console.log('VF-CD3 VERDICT: DEFECT CONFIRMED — block-junction mentions are lost',
-    `(app counts ${appN}/${expected}; control mention still detected: ${appN >= 1})`);
-} else if (appN === expected) {
-  console.log('VF-CD3 VERDICT: NO DEFECT — app counts all block-junction mentions');
-} else {
-  console.log('VF-CD3 VERDICT: INCONCLUSIVE — inspect output above');
-}
+
+const checks = [];
+const ok = (label, cond) => { checks.push(!!cond); console.log((cond ? 'ok  ' : 'FAIL'), label); };
+ok('the adversarial doc really has both junction shapes (heading+para, para+para)',
+   ev.junctionMerged && ev.headingMerged);
+ok('bare textContent still under-counts (1) — the separator injection is load-bearing',
+   ev.flatCount === 1);
+ok('block-separated extraction finds all 3', ev.blockAwareCount === expected);
+ok('APP counts every block-junction mention', appN === expected);
+ok('count is deterministic across reload', appN2 === expected);
+console.log('VF-CD3 VERDICT:', checks.every(Boolean) ? 'PASS' : 'FAIL');
 
 await browser.close();
 await srv.close();
