@@ -136,6 +136,16 @@ for(const c of CASES){
   // --- revert leg
   await setDoc(c.html);
   const before = await docText();
+  // A cross-block selection cannot come back as two blocks: replacing it with an
+  // inline element merges them, and textContent — which is what docText reads —
+  // has no separator at a block boundary. The author's boundary comes back as
+  // the single space selTextFromRange recorded in data-src, so THAT is the line
+  // to compare against; plain textContent equality would demand the two
+  // boundary words fuse into "remembersthe".
+  const beforeJoined = await page.evaluate(() => {
+    const ed = document.querySelector('#ed-content');
+    return ed.children.length ? [...ed.children].map(b => b.textContent).join(' ') : ed.textContent;
+  });
   const okSel = await selRange(c.a, c.b);
   if(okSel !== 'ok'){ ck(c.id + ': selection made', false, okSel); continue; }
   const made = await translateVia(c.lang);
@@ -148,8 +158,9 @@ for(const c of CASES){
   const stillSpan = (await spanMeta()).length;
   console.log('    after revert   :', show(after));
   ck(c.id + ': revert leaves no span behind', stillSpan === 0, stillSpan);
+  const wantBack = c.crossBlock ? beforeJoined : before;
   ck(c.id + ': revert gives the author\'s line back CODEPOINT for CODEPOINT',
-     after === before, 'got=' + show(after) + '  want=' + show(before));
+     after === wantBack, 'got=' + show(after) + '  want=' + show(wantBack));
 
   // --- remove leg (fresh document, same placement)
   if(c.crossBlock) continue;

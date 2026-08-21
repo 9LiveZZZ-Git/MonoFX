@@ -1018,6 +1018,8 @@ function flushSave(){
 window.addEventListener('pagehide', flushSave);
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') flushSave(); });
 
+// the landmark placeTSpan parks at a selection's edges — see markPut below
+const TS_MARK = '﻿';
 /* ================= sanitizer ================= */
 const BLOCK_KEEP = new Set(['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','H2','H3','BLOCKQUOTE','UL','OL','LI']);
 function sanitizeHTML(html){
@@ -1098,6 +1100,26 @@ function sanitizeHTML(html){
     el.remove();
   }
   walk(frag);
+  // execCommand leaves the husk of a run it re-wrapped — <b><i><u></u></i></b>
+  // with nothing inside — and the browser's own undo does not always take it
+  // back. An empty mark carries no text and no meaning; it must not reach
+  // storage, where it accumulates one husk per translate/undo cycle.
+  for(let pass = 0; pass < 6; pass++){
+    const husks = Array.from(frag.querySelectorAll('b,strong,i,em,u,s,strike,del,span'))
+      .filter(n => !n.classList.contains('tspan') && !n.textContent.length &&
+                   !n.querySelector('br,.tspan,.asterism'));
+    if(!husks.length) break;
+    husks.forEach(n => n.remove());
+  }
+  // placeTSpan's landmarks are blanked in the live DOM, never removed, so the
+  // browser's undo stack keeps working. Nothing should reach here — but a throw
+  // mid-placement would leave one, and an invisible character in a manuscript
+  // is exactly the kind of thing nobody ever finds again.
+  {
+    const w = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT);
+    let n;
+    while((n = w.nextNode())) if(n.nodeValue.indexOf(TS_MARK) > -1) n.nodeValue = n.nodeValue.split(TS_MARK).join('');
+  }
   // contenteditable leaves the first typed line as a bare top-level run;
   // exporters can only see paragraphs, so every stray inline run gets a <p>
   const TOP_BLOCK = /^(P|H2|H3|BLOCKQUOTE|UL|OL|DIV)$/;
@@ -3859,12 +3881,25 @@ function retranslateSpan(el, langId, src){
       toast(`${r.langName || r.lang.name} has no writing for that`);
       return null;
     }
+    // a new tongue is a new rendering, not a new decision about the span: the
+    // gap it owns, the size the author picked and whether it runs margin to
+    // margin all belong to the span, not to the language
+    if(el.dataset.pad === '1') fresh.dataset.pad = '1';
+    if(el.dataset.block === '1') fresh.dataset.block = '1';
+    if(el.dataset.size) fresh.dataset.size = el.dataset.size;
     fresh.dataset.tsnew = '1';
+    // where it lives, so it can be put back: replacing the whole contents of a
+    // bold run makes the browser delete the run with them
+    const hostBlock = blockOf(el), inlineChain = inlineChainOf(el.parentElement, hostBlock);
     let ok = false;
-    try{ ok = edContent.contains(el) && edApplyHTML(rangeAround(el), spanOuterHTML(fresh)); }catch(e){}
+    try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el), rg => edApplyHTML(rg, spanOuterHTML(fresh))); }catch(e){}
     if(!ok){ delete fresh.dataset.tsnew; el.replaceWith(fresh); return fresh; }
     const live = edContent.querySelector('.tspan[data-tsnew]');
-    if(live) delete live.dataset.tsnew;
+    if(live){
+      if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)) hostBlock.appendChild(live);
+      rewrapInline(live, inlineChain);
+      delete live.dataset.tsnew;
+    }
     try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
     return live || fresh;
   });
@@ -3971,6 +4006,140 @@ function blockOf(el){
   while(n && n !== edContent && !/^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName)) n = n.parentNode;
   return (n && n !== edContent) ? n : edContent;
 }
+// execCommand('insertHTML') decides for itself where an atomic element lands:
+// it hoists the span to the end of the block for a selection that ran to the
+// block's end, out of the block entirely for one that started at its beginning,
+// and inside a list item it sometimes drops the element and keeps only its
+// text. None of that is recoverable from the block alone. So placeTSpan parks
+// an invisible mark at the selection's start first — pushed just outside the
+// range, so the insert has no reason to touch it — and puts the span back
+// exactly there afterwards. A zero-width no-break space is used because the
+// author cannot type one and the browser's editing code leaves it alone;
+// markClear takes every one of them back out before anything is persisted.
+function markPut(el, mark){
+  if(!mark || !mark.parentNode || !edContent.contains(mark)) return false;
+  const i = mark.nodeValue.indexOf(TS_MARK);
+  if(i < 0) return false;
+  const after = mark.splitText(i + 1);
+  after.parentNode.insertBefore(el, after);
+  return true;
+}
+function markClear(){
+  const w = document.createTreeWalker(edContent, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  let n;
+  while((n = w.nextNode())) if(n.nodeValue.indexOf(TS_MARK) > -1) hits.push(n);
+  // blanked, never removed: the browser's undo stack holds references to the
+  // text nodes that surrounded the insert, and taking one out of the tree makes
+  // Ctrl+Z a no-op. An empty text node serializes to nothing and counts as
+  // nothing, so leaving it costs the document exactly zero characters.
+  for(const t of hits) t.nodeValue = t.nodeValue.split(TS_MARK).join('');
+}
+// The pad placeTSpan writes sits immediately after the span — unless the
+// placement repair wrapped the span back into the bold/italic run it replaced,
+// in which case it sits just outside that wrapper. Look out through the inline
+// wrappers, never past the end of the block.
+// the marks the author can put on a run of text, which a span replacing that
+// text has to be put back inside
+const INLINE_KEEP = ['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL'];
+function inlineChainOf(el, blk){
+  const chain = [];
+  for(let n = el; n && n !== blk && n !== edContent; n = n.parentElement){
+    if(INLINE_KEEP.indexOf(n.tagName) > -1) chain.push(n.tagName);
+  }
+  return chain;
+}
+function rewrapInline(live, chain){
+  for(const tag of chain){
+    if(live.closest(tag.toLowerCase())) continue;
+    const wrap = document.createElement(tag);
+    live.replaceWith(wrap);
+    wrap.appendChild(live);
+  }
+}
+// Replacing a span has the same hazards as inserting one: empty an inline run
+// through execCommand and the browser deletes the run along with its contents,
+// so the author's bold comes back unbolded — and a selection that fills a block
+// gets hoisted. Bracket the range the way placeTSpan does. Not inside a list
+// item, where a landmark on either side makes the insert drop the element.
+function edApplyMarked(range, apply){
+  const sc = range.startContainer;
+  const blk = blockOf(sc.nodeType === 1 ? sc : sc.parentElement);
+  let marked = false;
+  if(blk && blk !== edContent && blk.nodeName !== 'LI' && edContent.contains(blk)){
+    try{
+      const head = document.createTextNode(TS_MARK);
+      const r0 = range.cloneRange();
+      r0.collapse(true);
+      r0.insertNode(head);
+      range.setStartAfter(head);
+      const tail = document.createTextNode(TS_MARK);
+      const r1 = range.cloneRange();
+      r1.collapse(false);
+      r1.insertNode(tail);
+      range.setEndBefore(tail);
+      marked = true;
+    }catch(e){ marked = false; }
+  }
+  let ok = false;
+  try{ ok = apply(range); }catch(e){ ok = false; }
+  if(marked) markClear();
+  return ok;
+}
+function padAfter(el){
+  // blanked landmarks and the empty <b></b> husks execCommand leaves behind
+  // carry no characters, so the pad can sit on the far side of any number of them
+  const skip = nx => nx.nodeType === 3 ? !nx.nodeValue.length
+    : (nx.nodeType === 1 && !nx.textContent.length && nx.nodeName !== 'BR' &&
+       !(nx.classList && nx.classList.contains('tspan')));
+  let n = el;
+  while(n && n !== edContent){
+    let nx = n.nextSibling;
+    while(nx && skip(nx)) nx = nx.nextSibling;
+    if(nx) return nx.nodeType === 3 ? nx : null;
+    n = n.parentNode;
+    if(!n || n === edContent || /^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName)) break;
+  }
+  return null;
+}
+// Whether the span needs a pad, decided BEFORE the insert. execCommand is the
+// only step the browser's undo stack records; anything repaired afterwards is
+// invisible to redo, so a pad bolted on after the fact comes back on redo as
+// "…stand , and" — the exact typo the rule exists to prevent. Read what follows
+// the selection first and write the pad into the inserted HTML, or don't.
+function padPlan(range){
+  try{
+    const endEl = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
+    const blk = blockOf(endEl);
+    const probe = document.createRange();
+    probe.setStart(range.endContainer, range.endOffset);
+    probe.setEnd(blk, blk.childNodes.length);
+    const ch = probe.toString().split(TS_MARK).join('').charAt(0);
+    if(!ch) return 'need';                                   // end of block: the caret needs it
+    if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(ch)) return 'punct';   // no gap at all
+    if(/[\s\u00A0]/.test(ch)) return 'space';                // the author's own gap
+    return 'need';
+  }catch(e){ return 'need'; }
+}
+// Script characters — the forged PUA blocks and the legacy sample ones — belong
+// inside a .tspan and nowhere else. execCommand('insertHTML') sometimes drops
+// the element while KEEPING its text; that orphan carries no source, no tongue
+// and no font, survives revert, and every legible exporter prints it verbatim.
+function stripLooseScript(root){
+  if(!root) return;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  let n;
+  while((n = w.nextNode())){
+    if(!/[\uE000-\uF8FF]/.test(n.nodeValue)) continue;
+    if(n.parentElement && n.parentElement.closest('.tspan')) continue;
+    hits.push(n);
+  }
+  for(const t of hits){
+    t.nodeValue = t.nodeValue.replace(/[\uE000-\uF8FF](?:[\s\u00A0]*[\uE000-\uF8FF])*\u00A0?/g, '');
+    if(!t.nodeValue) t.remove();
+  }
+}
 function rangeAround(el, absorbPad){
   const r = document.createRange();
   r.selectNode(el);
@@ -3979,8 +4148,8 @@ function rangeAround(el, absorbPad){
   // only OUR pad — data-pad says so. Absorbing the author's own space instead
   // would silently delete it every time a span is reverted.
   if(absorbPad && el.dataset && el.dataset.pad === '1'){
-    const nx = el.nextSibling;
-    if(nx && nx.nodeType === 3 && /^\u00A0/.test(nx.nodeValue)) r.setEnd(nx, 1);
+    const nx = padAfter(el);
+    if(nx && /^\u00A0/.test(nx.nodeValue)) r.setEnd(nx, 1);
   }
   return r;
 }
@@ -3999,34 +4168,58 @@ function placeTSpan(span, langLabel){
       range = sel.rangeCount ? sel.getRangeAt(0) : null;
     }catch(e){}
   }
-  // Where the span BELONGS. execCommand('insertHTML') hoists it out when the
-  // selection ran to the end of its block — the heading kept "a" and the
-  // translation landed beside it as a sibling — and drops any inline marks the
-  // replaced text carried. Remember both, then put them back if it does.
-  const INLINE_KEEP = ['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL'];
-  let hostBlock = null, inlineChain = [];
+  // Where the span BELONGS. execCommand('insertHTML') moves it out of its block
+  // whenever the selection touched a block edge — to the end of the block for a
+  // trailing selection, clean out of it for a leading one — and drops any inline
+  // marks the replaced text carried. Remembering the block is not enough:
+  // appending to it is right only for the trailing case, and for the phrase a
+  // paragraph OPENS with it teleports the author's words to the end of it.
+  // Park an invisible mark at the selection's start instead — pushed just past
+  // the range, so the insert has no reason to touch it — and it names the exact
+  // spot to come back to, inline run included, whatever the browser did.
+  let hostBlock = null, inlineChain = [], marked = false, head = null;
   if(range){
     const start = range.startContainer;
     const startEl = start.nodeType === 1 ? start : start.parentElement;
     if(startEl && edContent.contains(startEl)){
       hostBlock = blockOf(startEl);
-      for(let n = startEl; n && n !== hostBlock && n !== edContent; n = n.parentElement){
-        if(INLINE_KEEP.indexOf(n.tagName) > -1) inlineChain.push(n.tagName);
-      }
+      inlineChain = inlineChainOf(startEl, hostBlock);
+      // …except inside a list item, where a mark on either side makes the insert
+      // drop the element and keep only its text. Unmarked, a list item places
+      // the span correctly on its own, so there is nothing to protect there.
+      try{
+        if(hostBlock.nodeName === 'LI') throw 0;
+        head = document.createTextNode(TS_MARK);
+        const r0 = range.cloneRange();
+        r0.collapse(true);
+        r0.insertNode(head);
+        range.setStartAfter(head);   // landmarks, never part of the selection
+        const tail = document.createTextNode(TS_MARK);
+        const r1 = range.cloneRange();
+        r1.collapse(false);
+        r1.insertNode(tail);
+        range.setEndBefore(tail);
+        marked = true;
+      }catch(e){ marked = false; head = null; }
     }
   }
+  const plan = range ? padPlan(range) : 'need';
+  if(plan === 'need') span.dataset.pad = '1'; else delete span.dataset.pad;
   let placed = false;
-  try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + '\u00A0'); }catch(e){}
+  try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + (plan === 'need' ? ' ' : '')); }catch(e){}
   if(placed && !edContent.querySelector('.tspan[data-tsnew]')){
-    // insertHTML reported success but dropped the element (seen inside
-    // list items): put it in by hand at the caret rather than lose the line
+    // insertHTML reported success but dropped the element while KEEPING its
+    // text (seen inside list items): put the element in by hand at the mark,
+    // and let the sweep below take the loose run out.
     try{
-      const sel = window.getSelection();
-      const r2 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-      if(r2 && edContent.contains(r2.commonAncestorContainer)){
-        r2.insertNode(span);
-        r2.collapse(false);
-      }else placed = false;
+      if(!markPut(span, head)){
+        const sel = window.getSelection();
+        const r2 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+        if(r2 && edContent.contains(r2.commonAncestorContainer)){
+          r2.insertNode(span);
+          r2.collapse(false);
+        }else placed = false;
+      }
     }catch(e){ placed = false; }
   }
   if(!placed && !edContent.querySelector('.tspan[data-tsnew]')){ // last-ditch path
@@ -4036,43 +4229,54 @@ function placeTSpan(span, langLabel){
   }
   const live = edContent.querySelector('.tspan[data-tsnew]');
   if(live){
-    // back inside the block it came from, carrying its pad with it
+    const shed = live.parentElement;
+    // Bracketed, the insert lands in place and undo/redo replay it exactly, so
+    // the repair below is a fallback for the cases where the browser still
+    // moves the span out of its block. It is a raw DOM edit and therefore
+    // invisible to undo — only worth making when the placement is already wrong.
     if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)){
-      const pad = live.nextSibling;
-      hostBlock.appendChild(live);
-      if(pad && pad.nodeType === 3 && /^[\u00A0\s]/.test(pad.nodeValue)) hostBlock.appendChild(pad);
+      // a text node that is nothing BUT the pad travels back with the span; one
+      // carrying the author's words stays where it is
+      let pad0 = live.nextSibling;
+      if(!(pad0 && pad0.nodeType === 3 && /^\u00A0[\s\u00A0]*$/.test(pad0.nodeValue))) pad0 = null;
+      if(markPut(live, head)){
+        if(pad0) live.after(pad0);
+      }else{
+        hostBlock.appendChild(live);
+        if(pad0) hostBlock.appendChild(pad0);
+      }
+      // an empty wrapper the insert built around the span is not the author's
+      for(let n = shed; n && n !== live.parentElement && n !== edContent && n.nodeType === 1 &&
+                        !n.firstChild && !/^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName);){
+        const up = n.parentElement; n.remove(); n = up;
+      }
     }
-    // and back inside the bold/italic/underline run it replaced text in
-    for(const tag of inlineChain){
-      if(live.closest(tag.toLowerCase())) continue;
-      const wrap = document.createElement(tag);
-      live.replaceWith(wrap);
-      wrap.appendChild(live);
+    stripLooseScript(hostBlock && edContent.contains(hostBlock) ? hostBlock : edContent);
+  }
+  if(marked) markClear();
+  // Reconcile what the browser actually did with the gap. insertHTML can turn
+  // the author's own space into an NBSP, or add one where the plan said none.
+  // Whoever ends up owning the gap is recorded on the span, because revert must
+  // absorb OUR pad and must never eat the author's space.
+  if(live){
+    const pad = padAfter(live);
+    const has = !!(pad && pad.nodeValue.charCodeAt(0) === 0x00A0);
+    if(!has) delete live.dataset.pad;
+    else if(plan === 'need') live.dataset.pad = '1';
+    else if(plan === 'punct'){
+      const rest = pad.nodeValue.slice(1);
+      if(rest) pad.nodeValue = rest; else pad.remove();
+      delete live.dataset.pad;
+    }else{                                     // 'space' — that NBSP is theirs
+      pad.nodeValue = pad.nodeValue.replace(/^[\s\u00A0]+/, ' ');
+      delete live.dataset.pad;
     }
   }
-  // The pad exists so the caret has somewhere to land after an atomic span, but
-  // it is only OURS when nothing else provides the gap. Where the author's own
-  // space follows, our pad doubles it; before punctuation it reads as a typo —
-  // "…stand , and" instead of "…stand, and". Whoever ends up owning the gap is
-  // recorded on the span, because revert must absorb our pad and must NOT eat
-  // the author's space.
   if(live){
-    const pad = live.nextSibling;
-    let ours = false;
-    if(pad && pad.nodeType === 3 && pad.nodeValue.charCodeAt(0) === 0x00A0){
-      const rest = pad.nodeValue.slice(1);
-      const sib = pad.nextSibling;
-      const tail = rest || (sib ? (sib.nodeType === 3 ? sib.nodeValue : sib.textContent) : '');
-      const nextCh = tail.charAt(0);
-      if(!nextCh) ours = true;                                    // end of block: the caret needs it
-      else if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(nextCh)){
-        if(rest) pad.nodeValue = rest; else pad.remove();          // punctuation: no gap at all
-      }else if(/[\s\u00A0]/.test(nextCh)){
-        if(rest) pad.nodeValue = rest.replace(/^[\s\u00A0]+/, ' ');
-        else { pad.remove(); if(sib && sib.nodeType === 3) sib.nodeValue = sib.nodeValue.replace(/^[\s\u00A0]+/, ' '); }
-      }else ours = true;                                          // no space of theirs: the pad separates
-    }
-    if(ours) live.dataset.pad = '1'; else delete live.dataset.pad;
+    // and back inside the bold/italic/underline run it replaced text in. With
+    // the mark this is a fallback — the mark already sits inside that run — so
+    // it fires only when the insert destroyed the wrapper itself.
+    rewrapInline(live, inlineChain);
   }
   if(live) delete live.dataset.tsnew;
   delete span.dataset.tsnew;
@@ -4141,7 +4345,7 @@ function tspanSheet(el){
     { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
         const blk = blockOf(el);
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), src); }catch(e){}
+        try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el, true), rg => edApplyText(rg, src)); }catch(e){}
         if(!ok) el.replaceWith(document.createTextNode(src));
         normalizeSpacing(blk);
         persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
@@ -4149,7 +4353,7 @@ function tspanSheet(el){
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
         const blk = blockOf(el);
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyText(rangeAround(el, true), ''); }catch(e){}
+        try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el, true), rg => edApplyText(rg, '')); }catch(e){}
         if(!ok) el.remove();
         normalizeSpacing(blk);
         persistEditor(); updateCount(); syncEmpty(); flushSave();
