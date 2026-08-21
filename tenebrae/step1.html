@@ -4316,7 +4316,7 @@ function omniCodexSheet(){
       actionSheet('Tenebrae Codex', [
         { note: `<b>${esc(meta.name)}</b> v${esc(String(meta.version || '\u2014'))}<br>The engine failed to wake in this browser. You can re-import the codex file, or remove it to fall back to the sample tongues.` },
         { label: 'Import Codex\u2026', icon: ICONS.imp, immediate: true, onTap: () => $('#codex-input').click() },
-        { label: 'Remove codex (use sample)', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
+        { label: 'Remove imported codex', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
       ]);
       return;
     }
@@ -4359,7 +4359,7 @@ function omniCodexSheet(){
           const go = h => { if(!h){ toast('Codex file not in storage'); return; } download('tenebrae-codex_' + fileSafe(String(meta.version || 'x')) + '.html', h, 'text/html'); };
           if(html) go(html); else kvGet('codexEngine').then(go);
         } },
-      { label: 'Remove codex (use sample)', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
+      { label: 'Remove imported codex', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
     ]);
   });
 }
@@ -4731,7 +4731,12 @@ function claudeCardsSheet(){
             const card = exists || newCard(c.title, c.type);
             card.aliases = [...new Set([...(card.aliases || []), ...c.aliases])];
             card.keywords = [...new Set([...(card.keywords || []), ...c.keywords])];
-            card.quotes = [...new Set([...(card.quotes || []), ...c.quotes])];
+            // quotes are {text, sceneId} everywhere else — renderCard, the search
+            // index and the card markdown export all read q.text, and a bare
+            // string here renders as "undefined" and throws in the exporter
+            const had = new Set((card.quotes || []).map(q => (q && q.text) || ''));
+            card.quotes = (card.quotes || []).concat(
+              c.quotes.filter(q => !had.has(q)).map(text => ({ text, sceneId: s.id })));
             if(c.notes) card.notes = card.notes ? card.notes + '\n\n' + c.notes : c.notes;
             card.updated = Date.now();
             if(!exists){ b.cards = b.cards || []; b.cards.push(card); }
@@ -6052,6 +6057,23 @@ function migrateBooks(books){
   });
   return books;
 }
+// A backup file is FOREIGN INPUT. It arrives from wherever the author got it,
+// and its scene docs go straight into edContent.innerHTML when a scene opens —
+// so an <img onerror> inside one executes, and flushSave persists it so it
+// re-fires on every subsequent open. sanitizeHTML has always existed but was
+// only ever applied on the WRITE side. ED-6 governs: no script, style or inline
+// handler may survive into a scene doc, whatever door it came through.
+function sanitizeRestoredBooks(books){
+  (Array.isArray(books) ? books : []).forEach(b => {
+    (b.chapters || []).forEach(c => (c.scenes || []).forEach(sc => {
+      if(typeof sc.doc === 'string' && sc.doc) sc.doc = sanitizeHTML(sc.doc);
+    }));
+    (b.cards || []).forEach(c => {
+      if(typeof c.notes === 'string' && c.notes) c.notes = sanitizeHTML(c.notes);
+    });
+  });
+  return books;
+}
 function offerRestore(text){
   try{
     const data = JSON.parse(text);
@@ -6060,6 +6082,7 @@ function offerRestore(text){
     confirmSheet('Restore this backup?', `${plural(st.books.length, 'book')} — replaces everything currently here.`, 'Restore', () => {
       state = st;
       migrateBooks(state.books);
+      sanitizeRestoredBooks(state.books);
       state.codex = state.codex || null;
       // omni-host packs carry no languages[] — same exemption as the boot guard
       if(state.codex && state.codex.kind !== 'omni-host' && validateCodex(state.codex)) state.codex = null;
