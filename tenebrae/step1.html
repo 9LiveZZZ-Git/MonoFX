@@ -4314,7 +4314,7 @@ function omniCodexSheet(){
   ensureOmni().then(w => {
     if(!w){
       actionSheet('Tenebrae Codex', [
-        { note: `<b>${esc(meta.name)}</b> v${esc(String(meta.version || '\u2014'))}<br>The engine failed to wake in this browser. You can re-import the codex file, or remove it to fall back to the sample tongues.` },
+        { note: `<b>${esc(meta.name)}</b> v${esc(String(meta.version || '\u2014'))}<br>The engine failed to wake in this browser. You can re-import the codex file, or remove it and fall back to the codex built into this app.` },
         { label: 'Import Codex\u2026', icon: ICONS.imp, immediate: true, onTap: () => $('#codex-input').click() },
         { label: 'Remove imported codex', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
       ]);
