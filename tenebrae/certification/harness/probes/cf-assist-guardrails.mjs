@@ -75,22 +75,26 @@ const tricky = await stub({ fixes: [
   { before: 'the gate', after: 'the gates', why: 'nbsp anchor', kind: 'grammar' },              // NBSP
   { before: 'the long road', after: 'the long‮ road', why: 'rtl override in the replacement', kind: 'grammar' },
   { before: '   ', after: 'x', why: 'whitespace anchor', kind: 'punctuation' },
+  { before: 'walks the long', after: 'walked the long', why: 'tense', kind: 'grammar' },        // clean, findable
 ] }, 'g', SCENE);
 console.log('   tricky fixes kept:', JSON.stringify(tricky.map(f => f.before)));
 ck('a homoglyph anchor is dropped', !tricky.some(f => /а/.test(f.before)));
 ck('a zero-width-joined anchor is dropped', !tricky.some(f => /​/.test(f.before)));
 ck('an NBSP anchor that the scene does not contain is dropped', !tricky.some(f => / /.test(f.before)));
 ck('a whitespace-only anchor is dropped', !tricky.some(f => !f.before.trim()));
-ck('only the one findable anchor survives', tricky.length === 1 && tricky[0].before === 'the long road', JSON.stringify(tricky));
-ck('NOTE: the replacement text is not inspected at all (U+202E survives into the offer)',
-   /‮/.test(tricky[0].after), JSON.stringify(tricky[0].after));
+// the replacement is text the author is about to read as their own: a bidi
+// override is invisible and reorders every character after it
+ck('a replacement carrying an RTL override is dropped', !tricky.some(f => /[\u202A-\u202E\u2066-\u2069]/.test(f.after)),
+   JSON.stringify(tricky.map(f => f.after)));
+ck('only the one clean findable anchor survives', tricky.length === 1 && tricky[0].before === 'walks the long', JSON.stringify(tricky));
 
 /* ---------- 3. a fix whose "after" carries script ---------- */
 const withPUA = await stub({ fixes: [
   { before: 'The drover', after: 'The  drover', why: 'script in the replacement', kind: 'spelling' }
 ] }, 'g', SCENE);
-ck('a replacement carrying PUA reaches the offer unchallenged (recorded, not assumed)',
-   withPUA.length === 1 && PUA_RE.test(withPUA[0].after), JSON.stringify(withPUA));
+// the codex writes the Tenebrae; a copy-editor's replacement never does
+ck('a replacement carrying PUA is dropped',
+   withPUA.length === 0, JSON.stringify(withPUA));
 
 /* ---------- 4. nothing is applied without an accept ---------- */
 await page.evaluate(() => { document.querySelector('#ed-content').innerHTML = '<p>Alpha stands at the gate.</p><p>The drover walks the long road home.</p>'; });
