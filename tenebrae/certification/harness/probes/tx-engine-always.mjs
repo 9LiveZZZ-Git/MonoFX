@@ -14,6 +14,14 @@
 //   window.tenebrae.codex().sample === true  |  the tongue list contains the
 //   sample-only tongue Rath-Speech / the "Sample codex" badge  |  translate2's
 //   romanization equals the sample cipher's instead of the codex's.
+// 2026-08 TRIAGE (ENVIRONMENTAL, no contract change): run alone this probe
+// exits 0 with "TX-1 VERDICT: PASS / failed checks: none". The suite's CRASH
+// (code 1, no verdict, 207s) is a Playwright wait timing out under the runner's
+// 3-way concurrency on a 4-CPU box — this probe imports the 3.4 MB codex twice
+// and sits through the engine's real ~30s wake poll. Only the WAIT BUDGETS are
+// raised below (filechooser/download 15s->45s, toast waits 60s->180s, codex
+// ground-truth load 40s->120s); every assertion is untouched, and the toast
+// waits still accept the wrong toast text so a real regression still fails.
 // Run: cd probes && node tx-engine-always.mjs
 import { chromium } from 'playwright-core';
 import { startServer } from '../serve.mjs';
@@ -70,7 +78,7 @@ const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromi
 // ---------- ground truth: the codex, standalone ----------
 const pageA = await browser.newPage();
 await pageA.goto('file://' + SCRATCH + '/tx-codex-patched.html');
-await pageA.waitForFunction(() => typeof window.translateE2C === 'function', null, { timeout: 40000 });
+await pageA.waitForFunction(() => typeof window.translateE2C === 'function', null, { timeout: 120000 });
 const TRUE_ROM = await pageA.evaluate(p => window.translateE2C(p).filter(x => x.cel && !x.drop).map(x => x.cel).join(' '), PHRASE);
 console.log('codex says (celan_basic):', JSON.stringify(TRUE_ROM));
 
@@ -131,7 +139,7 @@ await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
 {
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 15000 }),
+    page.waitForEvent('filechooser', { timeout: 45000 }),
     page.locator('#sheet .sh-item', { hasText: 'Import Codex' }).click(),
   ]);
   await chooser.setFiles(DEAD);
@@ -139,7 +147,7 @@ await wait(page, 1200);
 await page.waitForFunction(() => {
   const t = document.querySelector('#toast');
   return t && /didn.t wake|tongues awake|isn.t a Tenebrae codex/.test(t.textContent);
-}, null, { timeout: 60000 });
+}, null, { timeout: 180000 });
 const deadToast = await page.locator('#toast').innerText();
 console.log('[B] toast:', JSON.stringify(deadToast));
 ck('[B] failed wake: the app reports the engine did not wake', /didn.t wake/.test(deadToast), deadToast);
@@ -199,7 +207,7 @@ await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
 {
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 15000 }),
+    page.waitForEvent('filechooser', { timeout: 45000 }),
     page.locator('#sheet .sh-item', { hasText: 'Import Codex' }).click(),
   ]);
   await chooser.setFiles(CODEX);
@@ -207,7 +215,7 @@ await wait(page, 1200);
 await page.waitForFunction(() => {
   const t = document.querySelector('#toast');
   return t && /tongues awake|didn.t wake/.test(t.textContent);
-}, null, { timeout: 60000 });
+}, null, { timeout: 180000 });
 console.log('[C] import toast:', JSON.stringify(await page.locator('#toast').innerText()));
 const Cimp = await probe();
 ck('[C] an imported real codex is the engine (kind omni-host, not embedded)',
@@ -234,7 +242,7 @@ await page.locator('#sheet .sh-item', { hasText: 'Tenebrae Codex' }).click();
 await wait(page, 1200);
 {
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 15000 }),
+    page.waitForEvent('filechooser', { timeout: 45000 }),
     page.locator('#sheet .sh-item', { hasText: 'Import Codex' }).click(),
   ]);
   await chooser.setFiles(PACK);
@@ -264,7 +272,7 @@ await toLibrary(page);
 await page.click('#lib-more');
 await wait(page, 400);
 const [dl] = await Promise.all([
-  page.waitForEvent('download', { timeout: 15000 }),
+  page.waitForEvent('download', { timeout: 45000 }),
   page.locator('#sheet .sh-item', { hasText: 'Back up everything' }).click(),
 ]);
 const ownBackup = SCRATCH + '/tx-own-backup.json';
@@ -275,7 +283,7 @@ const restore = async (file, tag) => {
 await page.click('#lib-more');
   await wait(page, 400);
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 15000 }),
+    page.waitForEvent('filechooser', { timeout: 45000 }),
     page.locator('#sheet .sh-item', { hasText: 'Restore from backup' }).click(),
   ]);
   await chooser.setFiles(file);
