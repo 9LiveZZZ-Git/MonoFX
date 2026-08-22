@@ -45,7 +45,19 @@ const checks = [
   has('escaped *',               md.includes('\\*stars\\*')),
   has('escaped _',               md.includes('\\_unders\\_')),
   has('escaped `',               md.includes('\\`ticks\\`')),
-  has('⁂ separator + in-scene break (2 lines)', (md.match(/^⁂$/gm) || []).length === 2),
+  // The two asterisms are the same glyph and mean different things: one is the
+  // author's ornament INSIDE a scene, one is the break BETWEEN two scenes.
+  // Counting bare ⁂ lines cannot tell them apart, and a regression that swapped
+  // the markers would keep the count. Anchor on which is which, and on order.
+  has('in-scene ⁂ is marked as prose-level, not as a break',
+      /^⁂<!--tenebrae:ast-->$/m.test(md)),
+  has('the scene break is a bare ⁂ line, immediately before the next scene title',
+      /^⁂\n+<!--tenebrae:scene-->\n### /m.test(md)),
+  has('the in-scene asterism comes before the scene break that follows it',
+      md.indexOf('⁂<!--tenebrae:ast-->') > -1 &&
+      md.indexOf('⁂<!--tenebrae:ast-->') < md.search(/^⁂\n/m)),
+  has('both asterisms are present, and only one of them splits',
+      (md.match(/^⁂/gm) || []).length === 2 && (md.match(/^⁂$/gm) || []).length === 1),
   has('tspan -> romanization marker', md.includes('<!--tenebrae:begin') && md.includes('<!--tenebrae:end-->')),
   has('no PUA glyphs in md',     !PUA_RE.test(md)),
 ];

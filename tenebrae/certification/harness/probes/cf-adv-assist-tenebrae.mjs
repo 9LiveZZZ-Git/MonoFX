@@ -113,7 +113,14 @@ await page.evaluate(txt => {
 await T(900);
 const plainDoc = await page.evaluate(() => document.querySelector('#ed-content').innerHTML);
 console.log('   after the plain paste, tspan?', /tspan/.test(plainDoc), ' PUA in doc:', puaOf(plainDoc).length);
-ck('the plain paste really put script in the scene (teeth)', PUA_RE.test(plainDoc), puaOf(plainDoc).length);
+// The clipboard really does hold the script (asserted above, from the app's own
+// copy) — but the editor will not take it as prose. Script pasted as plain
+// characters carries no tongue, no source and no font: it cannot be tapped back
+// to English, cannot be re-rendered when the codex changes, and would ride into
+// every export as raw codepoints. It is refused at the door, with a reason,
+// rather than absorbed and stripped somewhere the author cannot see.
+ck('a paste-and-match-style of the app\u2019s own clipboard is refused, not absorbed',
+   !PUA_RE.test(plainDoc), puaOf(plainDoc).length + ' PUA landed');
 await runPass('Copy-edit this scene');
 const b3 = await lastBody();
 console.log('   body#3 user msg:', JSON.stringify(JSON.parse(b3).messages[0].content));

@@ -2045,10 +2045,12 @@ function mdEscape(t){ return t.replace(/([\\`*_~\[\]<])/g, '\\$1'); }
 function mdGuardLines(t){
   // a prose line must not open with a block marker, or renderers — and our
   // own importer — read it as structure (heading, quote, list item)
-  return t.split('\n').map(l =>
-    l.replace(/^(\s{0,3})(#{1,6}(?=[ \t])|>|[-+](?=[ \t]))/, '$1\\$2')
-     .replace(/^(\s{0,3})(\d{1,9})([.)])(?=[ \t])/, '$1$2\\$3')
-  ).join('\n');
+  return t.split('\n').map(l => {
+    const out = l
+      .replace(/^(\s{0,3})(#{1,6}(?=[ \t])|>|[-+](?=[ \t]))/, '$1\\$2')
+      .replace(/^(\s{0,3})(\d{1,9})([.)])(?=[ \t])/, '$1$2\\$3');
+    return SEP_TEXT.test(out) ? out + MD_PROSE_MARK : out;
+  }).join('\n');
 }
 function mdInline(node){
   let out = '';
@@ -2141,6 +2143,13 @@ const MD_SCENE_MARK = '<!--tenebrae:scene-->';
 // it is the author's own asterism. Foreign markdown cannot tell them apart and
 // keeps reading every ⁂ as a break; ours says which is which.
 const MD_AST_MARK = '<!--tenebrae:ast-->';
+// …and for the author's own prose that merely LOOKS like a separator. A typed
+// asterism, a lone #, a rule of dashes: unmarked, our own importer splits the
+// scene there and DELETES the paragraph. A backslash cannot carry this —
+// CommonMark escapes ASCII punctuation only, and ⁂ • · — are not — so it is
+// marked, the same way an in-scene asterism is, and stays invisible to any
+// other renderer.
+const MD_PROSE_MARK = '<!--tenebrae:prose-->';
 // and when chapter titles are left out, a chapter boundary has nothing left to
 // show for itself — two chapters run together under one blank line
 const MD_CHAPTER_MARK = '<!--tenebrae:chapter-->';
@@ -2570,7 +2579,12 @@ function epubChapterXHTML(ch, o){
     if(o.chapterTitles && ch.title){ const h = d.createElementNS(XHTML_NS, 'h1'); h.textContent = ch.title; body.appendChild(h); }
     const scenes = ch.scenes.filter(s => (s.doc && s.doc.trim()) || s.title);
     scenes.forEach((s, i) => {
-      if(i > 0 && o.asterism){ const p = d.createElementNS(XHTML_NS, 'p'); p.setAttribute('class', 'ast'); p.textContent = '⁂'; body.appendChild(p); }
+      // the break BETWEEN two scenes, not an asterism inside one. Both are ⁂ on
+      // the page and a reader cannot tell them apart, so the file has to: the
+      // in-scene one (epubSceneInto) stays a bare .ast, this one is marked, and
+      // only this one splits on re-import. Without it no split rule the app
+      // offers round-trips our own EPUB.
+      if(i > 0 && o.asterism){ const p = d.createElementNS(XHTML_NS, 'p'); p.setAttribute('class', 'ast brk'); p.textContent = '⁂'; body.appendChild(p); }
       if(o.sceneTitles && s.title){
         const h = d.createElementNS(XHTML_NS, 'h2');
         h.setAttribute('class', 'tenebrae-scene');
@@ -6055,6 +6069,13 @@ function textishBlocks(raw){
       flushP(); flushQ(); blocks.push({ k: 'ast' }); prevBlank = false; continue;
     }
     if(t === MD_CHAPTER_MARK){ flushP(); flushQ(); blocks.push({ k: 'chbreak', title: '' }); prevBlank = true; continue; }
+    // ours, and marked as prose: the author's own line, which merely looks like
+    // a separator. Tested before SEP_TEXT, which would eat it and the paragraph.
+    if(t.indexOf(MD_PROSE_MARK) > -1){
+      flushQ();
+      paraBuf.push(t.split(MD_PROSE_MARK).join('').trim());
+      prevBlank = false; continue;
+    }
     if(SEP_TEXT.test(t)){ flushP(); flushQ(); blocks.push({ k: 'sep' }); prevBlank = true; continue; }
     if(t === MD_DOC_MARK){ flushP(); flushQ(); ourMarkdown = true; blocks.push({ k: 'ourmd' }); continue; }
     if(t === MD_SCENE_MARK){ flushP(); flushQ(); nextHeadIsScene = true; continue; }
@@ -6125,6 +6146,12 @@ function htmlBlocksFromBody(rootEl, blocks, headingShift){
       if(tag === 'P' || tag === 'FIGCAPTION'){
         const plain = (c.textContent || '').trim();
         if(!plain) continue;
+        // ours, and it says which kind of ⁂ it is. Tested before SEP_TEXT,
+        // which would read both as a scene break.
+        if(ours && c.classList.contains('ast')){
+          blocks.push({ k: c.classList.contains('brk') ? 'sep' : 'ast' });
+          continue;
+        }
         if(SEP_TEXT.test(plain)){ blocks.push({ k: 'sep' }); continue; }
         blocks.push({ k: 'p', html: inlineFromNode(c).trim() });
         continue;
@@ -6427,7 +6454,14 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   // level. Letting it into the level set collapses chapterLevel onto it when
   // chapter titles were left out of the export, and every scene then opens a
   // chapter of its own.
-  const headBlocks = blocks.filter(b => b.k === 'h' && !(ourMd && b.scene));
+  // …unless the author has asked for heading-based splitting by hand, in which
+  // case the levels they can see are the ones to measure. Holding marked scene
+  // titles out of the level set in 'h' mode demoted real scene titles to
+  // in-scene headings and promoted an in-scene h3 to a scene title — on the
+  // author's own file, for choosing the rule the sheet offered them.
+  const wantMode = (opts && opts.sceneMode) || 'auto';
+  const headBlocks = blocks.filter(b => b.k === 'h' &&
+    !(ourMd && b.scene && (wantMode === 'auto' || wantMode === 'mark')));
   let levels = [...new Set(headBlocks.map(b => b.level))].sort((a, b) => a - b);
   let chapterLevel = null, sceneLevel = null;
   // A lone top-level heading standing before any prose is the book's title,
