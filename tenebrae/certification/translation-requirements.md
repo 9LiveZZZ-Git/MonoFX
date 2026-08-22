@@ -95,10 +95,17 @@ demonstrated against the running app.
   `exportOpts.sourceGloss`, on by default, togglable from the export sheet. The .docx
   romanization stays its own italic run; the gloss is a separate upright run.
 - **TX-11b** (F) **Our own Markdown round-trips exactly.** A Tenebrae export stamps
-  `<!--tenebrae:doc-->` and marks each scene-title heading with `<!--tenebrae:scene-->`,
-  because `###` means both "scene title" and "in-scene H2". Re-importing one of our files
-  reproduces its chapter/scene structure exactly. Foreign Markdown carries no markers and
-  keeps the heading-level heuristic.
+  `<!--tenebrae:doc-->` on the file and marks what a bare line cannot say for itself,
+  because every one of these glyphs means two things: `<!--tenebrae:scene-->` on a
+  scene-title heading (`###` is also an in-scene H2), `<!--tenebrae:chapter-->` on a
+  chapter-title heading, and `<!--tenebrae:ast-->` on an in-scene asterism (a bare `⁂`
+  is also the separator BETWEEN scenes). Re-importing one of our files reproduces its
+  chapter/scene structure exactly, under every split rule the import sheet offers —
+  including the ones the author can choose by hand, which must not relabel a marked
+  heading. Foreign Markdown carries no markers and keeps the heading-level heuristic.
+  A line of the author's own prose that merely *looks* like a separator — `⁂`, a lone
+  `#`, a rule of `• · = — – -` — is escaped on the way out, because on the way back in
+  an unescaped one splits the scene and the paragraph is deleted.
 
 ### Claude assist (v1.5, BYOK — the one feature that is not offline)
 - **TX-13** (F) **It does not exist until the author opts in.** No key, no feature: the
