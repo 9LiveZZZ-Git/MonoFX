@@ -1558,9 +1558,12 @@ edTitle.addEventListener('paste', e => {
 // font, so they cannot be tapped back to English, cannot be re-rendered when
 // the codex changes, and ride into every export as raw codepoints
 function loosePua(html){
-  const d = document.createElement('div');
-  d.innerHTML = String(html || '');
-  const w = document.createTreeWalker(d, NodeFilter.SHOW_TEXT);
+  // a <template>, never a <div>: template content is an inert fragment, and
+  // assigning untrusted markup to a live element's innerHTML loads its images
+  // and fires their onerror handlers even while it is out of the document
+  const tpl = document.createElement('template');
+  tpl.innerHTML = String(html || '');
+  const w = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
   let n = 0, t;
   while((t = w.nextNode())){
     if(t.parentElement && t.parentElement.closest('.tspan')) continue;
