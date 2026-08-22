@@ -4296,6 +4296,55 @@ function edReplaceInBlock(range, bodyFor){
     return edApplyHTML(all, whole) ? blk : null;
   }catch(e){ return null; }
 }
+// Chromium's editing commands need a RENDERED caret position after an atomic
+// contenteditable="false" box. When the span is the last rendered thing in its
+// block there is none: the selection canonicalises away and `delete` does
+// nothing — and STILL RETURNS TRUE — or insertHTML lands at the collapsed caret
+// and duplicates the whole paragraph. Neither shows up in the return value,
+// which is why the fallback here never fired: the author pressed Remove span
+// and either nothing happened or their prose came back twice.
+//
+// A span can end up last in its block long after it was placed — translate
+// mid-sentence, then delete the words that followed — so this cannot be settled
+// when the span is inserted. Give the command somewhere to land, then judge it
+// by what the block SAYS afterwards.
+function edReplaceSpan(el, text, bodyFor){
+  const blk = blockOf(el);
+  const root = (blk && blk !== edContent) ? blk : edContent;
+  const rendered = n => !!(n && n.nodeType === 3 && /[^\t\n\r ]/.test(n.nodeValue));
+  el.dataset.tsop = '1';                       // so it can be found again after a restore
+  const before = root.innerHTML;
+  const wasText = root.textContent || '';
+  const hadPad = el.dataset.pad === '1' && rendered(padAfter(el));
+  let temp = null;
+  if(!rendered(padAfter(el))){
+    temp = document.createTextNode('\u00A0');
+    el.after(temp);
+    el.dataset.pad = '1';                      // so rangeAround takes it back with the span
+  }
+  const want = wasText.replace((el.textContent || '') + (hadPad ? '\u00A0' : ''), text);
+  try{
+    const rg = rangeAround(el, true);
+    if(!edReplaceInBlock(rg, bodyFor)) edApplyText(rangeAround(el, true), text);
+  }catch(e){}
+  const stuck = root.querySelector('.tspan[data-tsop]');
+  if(stuck || (root.textContent || '') !== want){
+    // put the block back exactly as it was and do it by hand. Losing one undo
+    // step is a far smaller loss than losing the paragraph.
+    root.innerHTML = before;
+    const again = root.querySelector('.tspan[data-tsop]');
+    if(again){
+      const pad = padAfter(again);
+      if(again.dataset.pad === '1' && pad && pad.nodeValue.charCodeAt(0) === 0x00A0){
+        const rest = pad.nodeValue.slice(1);
+        if(rest) pad.nodeValue = rest; else pad.remove();
+      }
+      if(text) again.replaceWith(document.createTextNode(text)); else again.remove();
+    }
+  }
+  root.querySelectorAll('.tspan[data-tsop]').forEach(n => { delete n.dataset.tsop; });
+  if(temp && temp.parentNode) temp.remove();
+}
 function padAfter(el){
   // blanked landmarks and the empty <b></b> husks execCommand leaves behind
   // carry no characters, so the pad can sit on the far side of any number of them
@@ -4324,8 +4373,15 @@ function padPlan(range){
     const probe = document.createRange();
     probe.setStart(range.endContainer, range.endOffset);
     probe.setEnd(blk, blk.childNodes.length);
-    const ch = probe.toString().charAt(0);
-    if(!ch) return 'need';                                   // end of block: the caret needs it
+    // The whole remainder, not just its first character. A block that ends in
+    // collapsible whitespace renders NOTHING after the span, and Chromium's
+    // editing commands need a rendered caret position after an atomic
+    // contenteditable="false" box or they canonicalise the selection away. An
+    // NBSP counts as rendered — trim() would call it whitespace and earn the
+    // span a second pad it does not need.
+    const rest = probe.toString();
+    if(!/[^\t\n\r ]/.test(rest)) return 'need';              // nothing rendered follows
+    const ch = rest.charAt(0);
     if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(ch)) return 'punct';   // no gap at all
     if(/[\s\u00A0]/.test(ch)) return 'space';                // the author's own gap
     return 'need';
@@ -4435,7 +4491,16 @@ function placeTSpan(span, langLabel){
     const pad = padAfter(live);
     const has = !!(pad && pad.nodeValue.charCodeAt(0) === 0x00A0);
     if(!has) delete live.dataset.pad;
-    else if(plan === 'need') live.dataset.pad = '1';
+    else if(plan === 'need'){
+      live.dataset.pad = '1';
+      // nothing rendered followed the selection, so everything past our pad is
+      // collapsible whitespace the author cannot see — but leave it doubled and
+      // it becomes a visible gap the moment they type on. Leave exactly the pad.
+      pad.nodeValue = '\u00A0';
+      for(let nx = pad.nextSibling; nx && nx.nodeType === 3 && !/[^\t\n\r ]/.test(nx.nodeValue);){
+        const gone = nx; nx = nx.nextSibling; gone.remove();
+      }
+    }
     else if(plan === 'punct'){
       const rest = pad.nodeValue.slice(1);
       if(rest) pad.nodeValue = rest; else pad.remove();
@@ -4465,15 +4530,9 @@ function glossHTML(gloss){
 function tspanRevertItem(el, src){
   return { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
     const blk = blockOf(el);
-    let ok = false;
-    try{
-      const rg = rangeAround(el, true);
-      // back inside the bold/italic run the span was sitting in: the words the
-      // author wrote were bold before they were translated
-      ok = edContent.contains(el) &&
-           (!!edReplaceInBlock(rg, chain => inlineWrap(esc(src), chain)) || edApplyText(rangeAround(el, true), src));
-    }catch(e){}
-    if(!ok) el.replaceWith(document.createTextNode(src));
+    // back inside the bold/italic run the span was sitting in: the words the
+    // author wrote were bold before they were translated
+    if(edContent.contains(el)) edReplaceSpan(el, src, chain => inlineWrap(esc(src), chain));
     normalizeSpacing(blk);
     persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
   } };
@@ -4481,12 +4540,7 @@ function tspanRevertItem(el, src){
 function tspanRemoveItem(el){
   return { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
     const blk = blockOf(el);
-    let ok = false;
-    try{
-      const rg = rangeAround(el, true);
-      ok = edContent.contains(el) && (!!edReplaceInBlock(rg, () => '') || edApplyText(rangeAround(el, true), ''));
-    }catch(e){}
-    if(!ok) el.remove();
+    if(edContent.contains(el)) edReplaceSpan(el, '', () => '');
     normalizeSpacing(blk);
     persistEditor(); updateCount(); syncEmpty(); flushSave();
   } };
