@@ -62,7 +62,7 @@ const probe = page => page.evaluate(async phrase => {
   let r = null;
   try{ r = await window.tenebrae.translate2('celan_basic', phrase); }catch(e){ r = null; }
   let legacy = null;
-  try{ legacy = window.tenebrae.translate('celan-basic', phrase).romanization; }catch(e){}
+  try{ legacy = window.tenebrae.translateSampleLegacy('celan-basic', phrase).romanization; }catch(e){}
   return { codex: { kind: c.kind || null, name: c.name || null, sample: !!c.sample, embedded: !!c.embedded },
            tongues: (list.langs || []).map(l => l.name || l.id), note: list.note || '',
            rom: r ? r.romanization : null, sampleRom: legacy };

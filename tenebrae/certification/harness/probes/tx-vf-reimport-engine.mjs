@@ -86,7 +86,7 @@ const analyse = await page.evaluate(async books => {
         const rec = { book: b.title, lang: s.dataset.lang, src: s.dataset.src,
           rom: s.dataset.rom, omni: s.dataset.omni || null, flow: s.dataset.flow || null,
           hasScr: !!s.dataset.scr, textLen: (s.textContent || '').length };
-        try{ rec.sampleRom = window.tenebrae.translate(s.dataset.lang, s.dataset.src).romanization; }catch(e){ rec.sampleRom = 'ERR'; }
+        try{ rec.sampleRom = window.tenebrae.translateSampleLegacy(s.dataset.lang, s.dataset.src).romanization; }catch(e){ rec.sampleRom = 'ERR'; }
         try{ const r = await window.tenebrae.translate2(s.dataset.lang, s.dataset.src); rec.codexRom = r && r.romanization; }catch(e){ rec.codexRom = 'ERR'; }
         rec.isSample = rec.rom === rec.sampleRom;
         rec.isCodex = rec.rom === rec.codexRom;

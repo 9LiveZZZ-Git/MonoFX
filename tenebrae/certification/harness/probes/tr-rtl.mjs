@@ -28,7 +28,7 @@ const spans = await page.evaluate(() => {
 console.log('spans:', JSON.stringify(spans, null, 1));
 const ker = spans.find(s => s.lang === 'kerrackian');
 const kil = spans.find(s => s.lang === 'calgridarian');
-const engineDir = await page.evaluate(() => window.tenebrae.translate('kerrackian', 'stone gate holds').dir);
+const engineDir = await page.evaluate(() => window.tenebrae.translateSampleLegacy('kerrackian', 'stone gate holds').dir);
 console.log('engine dir for kerrackian:', engineDir);
 
 const has = (label, cond) => { console.log((cond ? 'ok  ' : 'MISS') + ' ' + label); return cond; };

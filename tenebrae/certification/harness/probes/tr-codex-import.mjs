@@ -109,7 +109,7 @@ const packState = await page.evaluate(async () => {
   const { langs, note } = await window.tenebrae.langs();
   const fonts = [...document.fonts].map(f => f.family);
   return { note, langs: langs.map(l => l.name), fonts: fonts.filter(f => f.includes('Probe')),
-           rom: window.tenebrae.translate('celan-basic', 'sea remembers').romanization };
+           rom: window.tenebrae.translateSampleLegacy('celan-basic', 'sea remembers').romanization };
 });
 console.log('[B] pack state:', JSON.stringify(packState));
 checks.push(

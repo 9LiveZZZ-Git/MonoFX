@@ -101,7 +101,7 @@ const probe = async () => page.evaluate(async ({ phrase }) => {
   let alias = null;
   try { alias = await window.tenebrae.translate2('celan-basic', phrase); } catch (e) { alias = { err: String(e && e.message) }; }
   let legacy = null;
-  try { legacy = window.tenebrae.translate('celan-basic', phrase); } catch (e) { legacy = { err: String(e && e.message) }; }
+  try { legacy = window.tenebrae.translateSampleLegacy('celan-basic', phrase); } catch (e) { legacy = { err: String(e && e.message) }; }
   return {
     codex: { kind: c.kind || null, name: c.name || null, sample: !!c.sample, embedded: !!c.embedded },
     tongues: langs.map(l => l.name || l.id),

@@ -79,7 +79,7 @@ const st = await page.evaluate(async () => {
   const { langs, note } = await window.tenebrae.langs();
   return { sampleStill: /sample codex/i.test(note), langNames: langs.map(l => l.name),
            zipFonts: [...document.fonts].map(f => f.family).filter(f => f.includes('Zip')),
-           rom: window.tenebrae.translate('celan-basic', 'the stone gate').romanization };
+           rom: window.tenebrae.translateSampleLegacy('celan-basic', 'the stone gate').romanization };
 });
 console.log('state after import:', JSON.stringify(st));
 
@@ -105,7 +105,7 @@ const back = await page.evaluate(async () => {
   const roms = {};
   for (const l of langs) roms[l.id] = (await window.tenebrae.translate2(l.id, 'the stone gate') || {}).romanization;
   return { ids: langs.map(l => l.id), note, roms,
-           legacySeamRom: window.tenebrae.translate('celan-basic', 'the stone gate').romanization };
+           legacySeamRom: window.tenebrae.translateSampleLegacy('celan-basic', 'the stone gate').romanization };
 });
 console.log('after removal:', JSON.stringify(back));
 const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);

@@ -65,7 +65,16 @@ Statuses: `pass` | `partial` | `fail` | `blocked` (could not be tested — say w
 - **IM-4** (F) Real-world proof: the author's actual manuscript (`SurvivingTheSpiralCascade_4.docx`, 1.2 MB) imports with sane structure and word count, no errors.
 
 ### TR — Tenebrae translation layer (included in step 1 ahead of the spec's v1)
-- **TR-1** (F) Seven tongues offered (Celan Basic, Celan High, Kerrackian, Kildaren, Calgridarian, Evernessian, Rath-Speech); sample-codex status disclosed in the UI until a real codex is imported.
+- **TR-1** ~~(F) Seven tongues offered (Celan Basic, Celan High, Kerrackian, Kildaren,
+  Calgridarian, Evernessian, Rath-Speech); sample-codex status disclosed in the UI until a
+  real codex is imported.~~ **Superseded by TX-1.** Two errors, both since corrected in the
+  artifact and left standing here only as a record: the codex's `ORDER` holds five alphabet
+  tongues plus the Celan Basic word script, and Rath-Speech — daggered "the Dead Tongue of
+  the Wheel" — carries no lexicon, roots or rules and is excluded from `buildLang`; the
+  spec's "seven" is the spec's mistake, not the app's. And there is no longer any
+  sample-codex status to disclose, because the real codex is the engine from first launch
+  and TX-1 forbids the sample cipher from ever becoming one. A certifier reading this row
+  alone will re-file three findings that are not defects.
 - **TR-2** (F) Deterministic translation: identical input → identical output across repeated calls and across reloads; no randomness, no Claude, no network.
 - **TR-3** (F) Selection → translate flow inserts a span that stores source text + language; source is editable and re-translation is regenerated deterministically.
 - **TR-4** (F) The RTL tongue (Kerrackian) renders its span with `dir="rtl"` isolation.
@@ -74,7 +83,8 @@ Statuses: `pass` | `partial` | `fail` | `blocked` (could not be tested — say w
 
 ### PN — Architectural principles (spec §1, as they apply to step 1)
 - **PN-1** No AI surface anywhere: no prose generation, no grammar UI, no Anthropic/API code path, no API-key storage. (Claude features are v1.5 by design; step 1 must contain zero of them.)
-- **PN-2** Translation is 100 % codex-owned and local (sample codex or imported codex; never a model, never a server).
+- **PN-2** Translation is 100 % codex-owned and local — **the real codex, always**; never a
+  model, never a server. (Was "sample codex or imported codex"; TX-1 supersedes that half.)
 - **PN-3** No lock-in: every piece of authored state is exportable losslessly (manuscript → md/txt, cards → md/zip/json, whole state → backup JSON; translation spans keep `sourceText`).
 
 ## Baseline B — Deviations from spec MVP (report, don't block)

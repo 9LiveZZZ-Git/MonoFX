@@ -162,7 +162,7 @@ async function openScene(bookTitle){
     const started = performance.now();
     const [r2, legacy] = await Promise.all([
       window.tenebrae.translate2('celan_high', 'the sea remembers'),
-      Promise.resolve(window.tenebrae.translate('celan-high', 'the sea remembers'))
+      Promise.resolve(window.tenebrae.translateSampleLegacy('celan-high', 'the sea remembers'))
     ]);
     return { ms: Math.round(performance.now() - started),
       active: r2 && { rom: r2.romanization, omni: !!r2.omni, lang: r2.lang.id },

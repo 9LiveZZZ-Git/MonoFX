@@ -2431,6 +2431,10 @@ function epubXhtml(title, build){
   link.setAttribute('rel', 'stylesheet'); link.setAttribute('type', 'text/css'); link.setAttribute('href', 'style.css');
   head.appendChild(t); head.appendChild(link);
   const body = d.createElementNS(XHTML_NS, 'body');
+  // our own file, and it says so: without this, a book with ⁂ between its scenes
+  // re-imports with the separators driving the split and every scene TITLE read
+  // as an in-scene heading
+  body.setAttribute('class', 'tenebrae');
   d.documentElement.appendChild(head);
   d.documentElement.appendChild(body);
   build(d, body);
@@ -2525,7 +2529,12 @@ function epubChapterXHTML(ch, o){
     const scenes = ch.scenes.filter(s => (s.doc && s.doc.trim()) || s.title);
     scenes.forEach((s, i) => {
       if(i > 0 && o.asterism){ const p = d.createElementNS(XHTML_NS, 'p'); p.setAttribute('class', 'ast'); p.textContent = '⁂'; body.appendChild(p); }
-      if(o.sceneTitles && s.title){ const h = d.createElementNS(XHTML_NS, 'h2'); h.textContent = s.title; body.appendChild(h); }
+      if(o.sceneTitles && s.title){
+        const h = d.createElementNS(XHTML_NS, 'h2');
+        h.setAttribute('class', 'tenebrae-scene');
+        h.textContent = s.title;
+        body.appendChild(h);
+      }
       epubSceneInto(d, body, syncScriptDoc(s.doc));
     });
   });
@@ -3295,7 +3304,7 @@ function omniMatchWord(word, matcher){
    first time a word is written and the face is rebuilt — and the geometry comes
    from composeWord itself, so what the writer draws is what the codex draws. */
 const AURIC_BASE = 0xE800, AURIC_TOP = 0xF8FF; // 4352 words, plenty for a book
-let auricFace = null;
+let auricFace = null, auricFullSaid = false;
 function auricClean(word){
   // exactly the codex's own carver input (transcribeHTML)
   return String(word).replace(/[^\wéäí'-]/g, '').toLowerCase();
@@ -3320,7 +3329,13 @@ function auricEnsure(words){
   for(const raw of words){
     const word = auricClean(raw);
     if(!word || A.words[word]) continue;
-    if(AURIC_BASE + A.order.length > AURIC_TOP) break; // out of block: leave it unwritten
+    if(AURIC_BASE + A.order.length > AURIC_TOP){
+      // 4,352 distinct words is a whole novel's vocabulary, but it is finite,
+      // and running out silently declined every further span with no reason
+      // given and no way back but a reload
+      if(!auricFullSaid){ auricFullSaid = true; try{ toast('Celan Basic has run out of room for new words in this session — reload to reset it'); }catch(e){} }
+      break;
+    }
     try{
       const g = auricGlyph(A, word);
       A.words[word] = { code: AURIC_BASE + A.order.length, glyph: g };
@@ -3516,8 +3531,12 @@ function omniScriptCSS(){
   if(!style){
     style = document.createElement('style');
     style.id = 'omni-style';
-    document.head.appendChild(style);
   }
+  // The forged faces ARE the engine's. A pack sheet naming the same tongue would
+  // otherwise be decided by whichever style element happened to be created
+  // first — a race that only ever came out right by accident. Last wins, and
+  // this one is always last.
+  document.head.appendChild(style);
   const rules = [];
   if(omniForged){
     // [data-omni] included: the static .tspan[data-omni][data-lang] serif rule
@@ -3955,7 +3974,7 @@ function tonguesList(){
   if(omniPack()){
     const meta = omniPack();
     return ensureOmni().then(w => w
-      ? { langs: omniLangs(w), note: `${esc(meta.name)} v${esc(String(meta.version || ''))} \u2014 your codex is the engine; every line is drawn by its own hand.` }
+      ? { langs: omniLangs(w), note: `${esc(meta.name)}${meta.version ? ' v' + esc(String(meta.version)) : ''} \u2014 your codex is the engine; every line is drawn by its own hand.` }
       : { langs: [], note: 'The codex engine failed to wake \u2014 try re-importing it.' });
   }
   const codex = codexActive();
@@ -4601,7 +4620,10 @@ async function importCodexPack(file){
       }
       if(html.length > 12 * 1024 * 1024){ toast('Codex file too large (12MB cap)'); return; }
       const vm = /tenebrae[-_]?codex[-_]?v?(\d+)/i.exec(file.name) || /codex[^<]{0,40}?v?(\d{1,3})\b/i.exec(html.slice(0, 4000));
-      const pack = { kind: 'omni-host', name: 'Codex Omnilingua', version: vm ? vm[1] : '?', size: html.length };
+      // a version we could not read is no version — "v?" is a placeholder that
+      // then rides into the codex sheet and the exported filename as if it meant
+      // something
+      const pack = { kind: 'omni-host', name: 'Codex Omnilingua', version: vm ? vm[1] : '', size: html.length };
       omniTeardown();
       window.__codexEngineHTML = html;
       await kvSet('codexEngine', html);
@@ -4612,7 +4634,7 @@ async function importCodexPack(file){
       const w = await ensureOmni();
       if(!w){ toast('The codex loaded but its engine didn\u2019t wake \u2014 check the file'); return; }
       await rerenderAllSpans();
-      toast(`${pack.name} v${pack.version} \u2014 ${plural(omniLangs(w).length, 'tongue')} awake`);
+      toast(`${pack.name}${pack.version ? ' v' + pack.version : ''} \u2014 ${plural(omniLangs(w).length, 'tongue')} awake`);
       return;
     }
     let pack = null;
@@ -4689,7 +4711,7 @@ function omniCodexSheet(){
   ensureOmni().then(w => {
     if(!w){
       actionSheet('Tenebrae Codex', [
-        { note: `<b>${esc(meta.name)}</b> v${esc(String(meta.version || '\u2014'))}<br>The engine failed to wake in this browser. You can re-import the codex file, or remove it and fall back to the codex built into this app.` },
+        { note: `<b>${esc(meta.name)}</b>${meta.version ? ' v' + esc(String(meta.version)) : ''}<br>The engine failed to wake in this browser. You can re-import the codex file, or remove it and fall back to the codex built into this app.` },
         { label: 'Import Codex\u2026', icon: ICONS.imp, immediate: true, onTap: () => $('#codex-input').click() },
         { label: 'Remove imported codex', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
       ]);
@@ -4713,7 +4735,7 @@ function omniCodexSheet(){
       return `<b>${esc(l.name)}</b>${dirBadge}<span style="opacity:.7"> \u2014 ${esc(l.script || '')}${stats}</span>${strip}`;
     }).join('<div style="height:10px"></div>');
     actionSheet('Tenebrae Codex', [
-      { note: `<b>${esc(meta.name)}</b> v${esc(String(meta.version || '\u2014'))} \u00b7 ${plural(langs.length, 'tongue')} awake<br><span style="opacity:.7">Your codex file is the engine \u2014 hosted whole, never forked. Re-import a newer codex any time; every span re-renders from its source.</span><div style="height:8px"></div>${rows}` },
+      { note: `<b>${esc(meta.name)}</b>${meta.version ? ' v' + esc(String(meta.version)) : ''} \u00b7 ${plural(langs.length, 'tongue')} awake<br><span style="opacity:.7">Your codex file is the engine \u2014 hosted whole, never forked. Re-import a newer codex any time; every span re-renders from its source.</span><div style="height:8px"></div>${rows}` },
       { label: 'Preview a phrase\u2026', icon: ICONS.rune, onTap: () => {
           promptSheet('Preview a Phrase', { placeholder: 'The sea remembers', saveLabel: 'Render' }, v => {
             if(!v) return;
@@ -4731,7 +4753,7 @@ function omniCodexSheet(){
       { label: 'Import Codex\u2026', icon: ICONS.imp, immediate: true, onTap: () => $('#codex-input').click() },
       { label: 'Export the codex file (.html)', icon: ICONS.json, onTap: () => {
           const html = window.__codexEngineHTML;
-          const go = h => { if(!h){ toast('Codex file not in storage'); return; } download('tenebrae-codex_' + fileSafe(String(meta.version || 'x')) + '.html', h, 'text/html'); };
+          const go = h => { if(!h){ toast('Codex file not in storage'); return; } download(meta.version ? 'tenebrae-codex_' + fileSafe(String(meta.version)) + '.html' : 'tenebrae-codex.html', h, 'text/html'); };
           if(html) go(html); else kvGet('codexEngine').then(go);
         } },
       { label: 'Remove imported codex', icon: ICONS.trash, destructive: true, onTap: () => removeOmniPack() }
@@ -4797,7 +4819,11 @@ $('#codex-input').addEventListener('change', async e => {
 // tiny read-only console API — handy for poking the deterministic engine
 try{
   window.tenebrae = Object.freeze({
-    translate: (langId, text) => translateText(langId, text),
+    // the sample cipher, under a name that says so. It collapses any id it does
+    // not know onto languages[0] and answers with plausible-looking output, and
+    // as `translate` it read like the app's own engine — four probes drove it by
+    // mistake and measured the cipher instead of the codex.
+    translateSampleLegacy: (langId, text) => translateText(langId, text),
     translate2: (langId, text) => resolveTranslate(langId, text),
     langs: () => tonguesList(),
     wordSVG: (langId, word, size, color) => ensureOmni().then(w => w ? omniWordSVG(w, langId, word, size || 100, color || '#000') : null),
@@ -5956,13 +5982,18 @@ function inlineFromNode(node){
 }
 function htmlBlocksFromBody(rootEl, blocks, headingShift){
   const shift = headingShift || 0;
+  // a body we wrote ourselves names its scene titles outright, the same claim
+  // <!--tenebrae:scene--> makes in our Markdown
+  const ours = !!(rootEl.classList && rootEl.classList.contains('tenebrae'));
+  if(ours && !blocks.some(b => b.k === 'ourmd')) blocks.push({ k: 'ourmd' });
   const walk = el => {
     for(const c of Array.from(el.children)){
       const tag = c.tagName;
       const hm = tag.match(/^H([1-6])$/);
       if(hm){
         const txt = inlineFromNode(c).trim();
-        if(plainOfHTML(txt)) blocks.push({ k: 'h', level: Math.min(6, +hm[1] + shift), html: txt });
+        if(plainOfHTML(txt)) blocks.push({ k: 'h', level: Math.min(6, +hm[1] + shift), html: txt,
+          scene: (ours && c.classList.contains('tenebrae-scene')) || undefined });
         continue;
       }
       if(tag === 'HR' || (tag === 'DIV' && c.classList.contains('asterism'))){ blocks.push({ k: 'sep' }); continue; }

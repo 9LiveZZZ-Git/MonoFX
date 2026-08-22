@@ -24,7 +24,7 @@ const base = await page.evaluate(async phrase => {
   const res = C.compileText(T, phrase, 'e2l');
   const codexTruth = res.lines.map(l => l.map(p => p.t).join(' ')).join(' ');
   const r2 = await window.tenebrae.translate2('celan_high', phrase);
-  const legacy = window.tenebrae.translate('celan_high', phrase);
+  const legacy = window.tenebrae.translateSampleLegacy('celan_high', phrase);
   return { codexTruth, active: r2 && r2.romanization, sample: legacy && legacy.romanization,
            codex: window.tenebrae.codex(), langs: (await window.tenebrae.langs()).langs.map(l => l.id) };
 }, PHRASE);
@@ -67,7 +67,7 @@ await wait(page, 2500);
 const after = await page.evaluate(async phrase => {
   const pack = window.tenebrae.codex();
   const r2 = await window.tenebrae.translate2('celan_high', phrase);
-  const legacy = window.tenebrae.translate('celan_high', phrase);
+  const legacy = window.tenebrae.translateSampleLegacy('celan_high', phrase);
   const L = await window.tenebrae.langs();
   return { pack: { kind: pack.kind, name: pack.name, sample: !!pack.sample },
            active: r2 && r2.romanization, activeLang: r2 && r2.lang && r2.lang.id,

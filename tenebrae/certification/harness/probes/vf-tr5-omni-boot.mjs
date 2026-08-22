@@ -61,7 +61,7 @@ has('boot throws unhandled TypeError (codexFontCSS on omni-host pack)', bootType
 // the app still runs and the codex still answers after the throw?
 const alive = await page.evaluate(async () => {
   try{
-    const r = await window.tenebrae.translate('celan-basic', 'gate');
+    const r = await window.tenebrae.translateSampleLegacy('celan-basic', 'gate');
     const rom = r && (r.then ? (await r).romanization : r.romanization);
     return { libraryVisible: !!document.querySelector('#scr-library.on'), rom: rom || null };
   }catch(e){ return { libraryVisible: !!document.querySelector('#scr-library.on'), rom: 'ERR:' + e.message }; }

@@ -25,8 +25,8 @@ const REF = await page.evaluate(async src => {
   const first = await window.tenebrae.translate2('celan_high', src);
   const codex = await window.tenebrae.translate2('celan_high', src);
   window.__firstRom = first.romanization;
-  const sample = window.tenebrae.translate('celan_high', src);
-  const sample2 = window.tenebrae.translate('celan-basic', src);
+  const sample = window.tenebrae.translateSampleLegacy('celan_high', src);
+  const sample2 = window.tenebrae.translateSampleLegacy('celan-basic', src);
   return { firstRom: first.romanization, codexRom: codex.romanization, codexLang: codex.lang.id, codexFlow: codex.flow,
            sampleRom: sample.romanization, sampleLang: sample.lang.id,
            sampleBasicRom: sample2.romanization, sample2Lang: sample2.lang.id };

@@ -98,7 +98,7 @@ try{
 console.log('R2 import committed at t=' + committedAt + 'ms', importErr ? ('(error: ' + importErr + ')') : '');
 await page.waitForTimeout(500);
 
-const sampleRom = await page.evaluate(() => { try{ return window.tenebrae.translate('celan_high', 'the sea remembers').romanization; }catch(e){ return null; } });
+const sampleRom = await page.evaluate(() => { try{ return window.tenebrae.translateSampleLegacy('celan_high', 'the sea remembers').romanization; }catch(e){ return null; } });
 const inWindow = await readSpans(page);
 console.log('R2 spans while boot is still held:', JSON.stringify(inWindow));
 console.log('R2 legacy sample cipher answer:', JSON.stringify(sampleRom));
@@ -169,7 +169,7 @@ await page2.waitForTimeout(1800);
 const ctl = await page2.evaluate(async () => {
   const spans = [...document.querySelectorAll('#ed-content .tspan')];
   const r = await window.tenebrae.translate2('celan_high', 'the sea remembers');
-  const sample = (() => { try{ return window.tenebrae.translate('celan_high', 'the sea remembers').romanization; }catch(e){ return null; } })();
+  const sample = (() => { try{ return window.tenebrae.translateSampleLegacy('celan_high', 'the sea remembers').romanization; }catch(e){ return null; } })();
   return { live: spans.map(s => ({ lang: s.dataset.lang, src: s.dataset.src, rom: s.dataset.rom, omni: s.dataset.omni || null, txt: s.textContent.slice(0, 12) })),
            codexRom: r && r.romanization, sampleRom: sample };
 });

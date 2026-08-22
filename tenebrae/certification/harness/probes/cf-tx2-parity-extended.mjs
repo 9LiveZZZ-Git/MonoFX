@@ -202,7 +202,7 @@ const seam = await pageB.evaluate(async () => {
   const numStr = await window.tenebrae.translate2('celan_basic', '42');
   const nul    = await window.tenebrae.translate2('celan_basic', null);
   const nulStr = await window.tenebrae.translate2('celan_basic', 'null');
-  const legacy = window.tenebrae.translate('celan-basic', 'the sea remembers the stone gate');
+  const legacy = window.tenebrae.translateSampleLegacy('celan-basic', 'the sea remembers the stone gate');
   return { aliasBasicSame: j(canonB) === j(aliasB), aliasHighSame: j(canonH) === j(aliasH),
            rathLang: rath && rath.lang && rath.lang.id, rathRom: rath && rath.romanization,
            canonBRom: canonB.romanization, canonHRom: canonH.romanization,
@@ -213,19 +213,18 @@ const seam = await pageB.evaluate(async () => {
 console.log('seam:', JSON.stringify(seam).slice(0, 600));
 ck("alias id 'celan-basic' is byte-identical to 'celan_basic'", seam.aliasBasicSame);
 ck("alias id 'celan-high' is byte-identical to 'celan_high'", seam.aliasHighSame);
-ck("the dead tongue 'rath-speech' answers as Celan Basic in the CODEX, never in the cipher",
-   seam.rathLang === 'celan_basic' && seam.rathRom === seam.canonBRom && seam.rathRom !== seam.legacyRom,
-   `rath=${JSON.stringify(seam.rathRom)} legacy-sample=${JSON.stringify(seam.legacyRom)}`);
+// A tongue this codex does not have is not Celan Basic. Answering as Celan
+// Basic is what destroyed the author's record of what a passage was written in:
+// the span was relabelled and RE-EXPORTED under the wrong tongue. It refuses.
+ck("the dead tongue 'rath-speech' is refused, not quietly answered as Celan Basic",
+   seam.rathRom == null,
+   `rath=${JSON.stringify(seam.rathRom)} celan_basic=${JSON.stringify(seam.canonBRom)}`);
 ck('an unknown tongue id returns null, not a cipher answer', seam.bogus === null, JSON.stringify(seam.bogus));
-// An EMPTY tongue id is not a refusal: omniLangId('') is falsy, so
-// omniTranslate falls back to its default tongue (step1.html L3654,
-// `omniLangId(rawLangId) || 'celan_basic'`). The requirement TX-1 imposes is
-// that the answer is the CODEX's and is labelled honestly — which it is. An
-// unknown-but-non-empty id still refuses with null (checked above).
-ck("an empty tongue id defaults to Celan Basic in the CODEX (never the cipher) and says so",
-   seam.emptyId && seam.emptyId.omni === true && seam.emptyId.lang === 'celan_basic'
-   && seam.emptyId.rom === seam.canonBRom && seam.emptyId.rom !== seam.legacyRom,
-   JSON.stringify(seam.emptyId));
+// An empty tongue id names no tongue, so there is no honest answer to give. It
+// used to fall through to Celan Basic, which is the same silent relabelling the
+// dead-tongue case above rules out.
+ck("an empty tongue id is refused, not defaulted to Celan Basic",
+   seam.emptyId == null, JSON.stringify(seam.emptyId));
 ck('non-string text is handled as String(text) — 42', seam.numSame, JSON.stringify(seam.numRom));
 ck('non-string text is handled as String(text) — null', seam.nulSame, JSON.stringify(seam.nulRom));
 ck('the legacy sample seam still answers differently (the parity check discriminates)',

@@ -308,7 +308,7 @@ ck('TX-10 re-imported spans never degrade to Latin', BACK.spans.every(s => PUA_R
 // (window.tenebrae.translate) for the same lang+source and compare byte for byte.
 const IDENT = await page.evaluate(spans => spans.map(s => {
   let sample = null;
-  try{ sample = window.tenebrae.translate(s.lang, s.src).romanization; }catch(e){ sample = 'ERR:' + e.message; }
+  try{ sample = window.tenebrae.translateSampleLegacy(s.lang, s.src).romanization; }catch(e){ sample = 'ERR:' + e.message; }
   return { lang: s.lang, restored: s.rom, sample, same: s.rom === sample };
 }), BACK.spans);
 console.log('engine identification (restored vs legacy sample cipher):');

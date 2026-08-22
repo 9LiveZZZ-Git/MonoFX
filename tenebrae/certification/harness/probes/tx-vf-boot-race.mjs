@@ -56,7 +56,7 @@ const b1 = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' }
     const C = w.CODEX;
     const res = C.compileText(C.TRANS.celan_high, phrase, 'e2l');
     return { codex: res.lines.map(l => l.map(p => p.t).join(' ')).join(' '),
-             sample: window.tenebrae.translate('celan_high', phrase).romanization };
+             sample: window.tenebrae.translateSampleLegacy('celan_high', phrase).romanization };
   }, PHRASE);
   console.log('earliest translate2 fired at', early.when && early.when.toFixed(1), 'ms after navigation');
   console.log('  result:', JSON.stringify(early.t), 'lang:', JSON.stringify(early.lang), 'err:', early.err);

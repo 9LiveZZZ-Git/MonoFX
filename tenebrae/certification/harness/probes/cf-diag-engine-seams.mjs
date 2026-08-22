@@ -14,7 +14,7 @@ const out = await page.evaluate(async (s) => {
   const { langs } = await window.tenebrae.langs();
   const rows = [];
   for(const l of langs){
-    const a = await window.tenebrae.translate(l.id, s);
+    const a = await window.tenebrae.translateSampleLegacy(l.id, s);
     const b = await window.tenebrae.translate2(l.id, s);
     rows.push({ id:l.id, name:l.name, dir:l.dir, script:l.script,
       legacy:a.romanization, real:b.romanization,

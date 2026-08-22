@@ -4,7 +4,7 @@
 //   2. EPUB re-import rebuilds spans through the LEGACY SAMPLE cipher
 //   3. DOCX / plain text do not keep the English source recoverable
 // Ground truth for "is this the sample cipher" is the app's own legacy seam
-// window.tenebrae.translate(), compared against the codex's compileText.
+// window.tenebrae.translateSampleLegacy(), compared against the codex's compileText.
 // Run: cd probes && node tx-vf-export-truth.mjs
 import { launch, wait, createBook, insertTranslationSpan, downloadFromSheet, verdict } from './ex-lib.mjs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
