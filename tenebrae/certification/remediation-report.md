@@ -256,9 +256,13 @@ In particular:
    document a file will contain before writing it, and re-forges the face as it goes —
    correct, and unmeasured at book length. `edReplaceSpan` snapshots and may restore the
    whole block on every span operation; also unmeasured on a very long paragraph.
-5. **TX-12 still has no probe of its own.** Its status in the full report was derived
-   from other domains' defects; those defects are closed, but no adversarial work has
-   been aimed at the id.
+5. ~~**TX-12 still has no probe of its own.**~~ **Closed.** `cf-tx12-hostile` now owns
+   the id: XML/HTML metacharacters in the prose around a translation, emoji, ZWJ
+   sequences and combining marks, an over-long word, a 90-clause selection, a
+   cross-block selection that swallows an existing span, six rapid translate/undo
+   cycles, and a reload fired mid-translation. Twenty-one checks, and the rule
+   throughout is the requirement's own: whatever else happens, the author's characters
+   are still in the document.
 6. **Nobody has adversarially read pass 2's own work.** Pass 2 exists because pass 1's
    fixes were read by someone other than their author, and four of them did not survive
    that. Pass 2's fixes have had the suite, and the suite caught three self-inflicted
