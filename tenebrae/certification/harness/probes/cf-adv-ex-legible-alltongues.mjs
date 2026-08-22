@@ -136,10 +136,12 @@ const unesc = s => s.replace(/\\([\\`*_~\[\]<])/g, '$1');
 for(const w of want){
   ck(`md: ${w.lang} — marker carries the tongue + English, body carries the romanization`,
      md.includes(`"language":"${w.lang}"`) && md.includes(`"source":"${w.src}"`) &&
-     new RegExp('<!--tenebrae:begin[^>]*"source":"' + w.src.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '"-->(.*?)<!--tenebrae:end-->')
+     // the marker's JSON closes with } before the comment does: "source" is the
+     // last field, but "…"-->' is not what the file says
+     new RegExp('<!--tenebrae:begin[^>]*"source":"' + w.src.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '"[^>]*-->(.*?)<!--tenebrae:end-->')
        .test(md.replace(/\n/g,' ')) &&
      unesc(md).includes(w.rom),
-     JSON.stringify((md.match(new RegExp('<!--tenebrae:begin [^-]*?"source":"' + w.src.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '".{0,4}-->[^<]*<!--tenebrae:end-->'))||[])[0]));
+     JSON.stringify((md.match(new RegExp('<!--tenebrae:begin [^-]*?"source":"' + w.src.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '"[^>]*-->[^<]*<!--tenebrae:end-->'))||[])[0]));
   ck(`txt: ${w.lang} — romanization with the English bracketed beside it`,
      txt.includes(`${w.rom} [${w.src}]`), txt.includes(w.rom) ? 'rom present' : 'ROM MISSING');
   const romRun = `<w:rPr><w:i/></w:rPr><w:t xml:space="preserve">${w.rom.replace(/&/g,'&amp;')}</w:t>`;
@@ -148,9 +150,15 @@ for(const w of want){
      dxml.includes(romRun) && dxml.includes(glossRun),
      (dxml.includes(romRun) ? '' : 'no italic rom run; ') + (dxml.includes(glossRun) ? '' : 'no gloss run'));
 }
-ck('md: the vertical tongues\' newlines never leak into the marker body (a line break would split the paragraph)',
-   !/<!--tenebrae:begin[^]*?\n[^]*?<!--tenebrae:end-->/.test(md.split('<!--tenebrae:end-->').map((s,i,a)=> i<a.length-1 ? s+'<!--tenebrae:end-->' : s).join('')),
-   'markers per line: ' + md.split('\n').filter(l=>l.includes('tenebrae:begin')).length);
+// per marker, not across them: a lazy [^]*? still runs from the FIRST begin to
+// the SECOND end, so the old form reported a newline whenever two markers sat
+// on two lines — which is every ordinary document
+{
+  const bodies = [...md.matchAll(/<!--tenebrae:begin[\s\S]*?-->([\s\S]*?)<!--tenebrae:end-->/g)].map(m => m[1]);
+  ck('md: the vertical tongues\' newlines never leak into the marker body (a line break would split the paragraph)',
+     bodies.length === want.length && bodies.every(b => b.indexOf('\n') === -1),
+     JSON.stringify(bodies));
+}
 
 /* ---------- re-import the .md ---------- */
 if(await page.locator('#bk-back').isVisible().catch(()=>false)){ await page.click('#bk-back'); await wait(page, 700); }

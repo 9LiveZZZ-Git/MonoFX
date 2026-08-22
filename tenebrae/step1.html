@@ -452,6 +452,14 @@ input{font:inherit;color:inherit;background:none;border:0}
   unicode-bidi:isolate;
   -webkit-user-modify:read-only;
 }
+/* a span whose tongue this codex has no writing for: the author's words, kept
+   and marked, never passed off as prose */
+.tspan[data-unknown="1"]{
+  background:transparent;
+  box-shadow:none;
+  border-bottom:1px dotted color-mix(in srgb, var(--gild) 70%, transparent);
+  opacity:.85;
+}
 .tspan:active{background:var(--press)}
 .ts-src{
   font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.5;
@@ -1051,6 +1059,7 @@ function sanitizeHTML(html){
           if(/^(s|l|xl)$/.test(child.dataset.size || '')) t.dataset.size = child.dataset.size;
           if(child.dataset.block === '1') t.dataset.block = '1';
           if(child.dataset.pad === '1') t.dataset.pad = '1';
+          if(child.dataset.unknown === '1') t.dataset.unknown = '1';
           if(child.dataset.omni) t.dataset.omni = '1';
           if(child.getAttribute('dir') === 'rtl') t.setAttribute('dir', 'rtl');
           t.setAttribute('contenteditable', 'false');
@@ -1058,6 +1067,16 @@ function sanitizeHTML(html){
             ? (child.dataset.scr || child.dataset.rom || '')
             : (child.textContent || child.dataset.rom || '');
           child.replaceWith(t); continue;
+        }
+        if(child.classList.contains('tspan')){
+          // A .tspan that failed the test above has no source to tap back to,
+          // so it is not a span any more — but unwrapping it would promote its
+          // PUA run to bare prose, where it has no font, no meaning, and rides
+          // out into every export as raw codepoints. Keep the romanization if
+          // there is one; otherwise there is nothing here worth keeping.
+          const rom = String(child.dataset.rom || '').trim();
+          if(rom) child.replaceWith(document.createTextNode(rom)); else child.remove();
+          continue;
         }
         const sc = child.classList.contains('sc') || /small-caps/.test(child.getAttribute('style') || '');
         if(sc){
@@ -2026,7 +2045,7 @@ function mdFromDoc(doc){
     if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) out += mdGuardLines(mdEscape(t)) + '\n\n'; return; }
     if(n.nodeType !== 1) return;
     const tag = n.tagName;
-    if(tag === 'DIV' && n.classList.contains('asterism')){ out += '⁂\n\n'; return; }
+    if(tag === 'DIV' && n.classList.contains('asterism')){ out += '⁂' + MD_AST_MARK + '\n\n'; return; }
     if(tag === 'P' || tag === 'DIV'){ const t = mdGuardLines(mdInline(n).trim()); out += (t ? t : '') + '\n\n'; return; }
     if(tag === 'H2'){ out += '### ' + mdInline(n).trim() + '\n\n'; return; }
     if(tag === 'H3'){ out += '#### ' + mdInline(n).trim() + '\n\n'; return; }
@@ -2076,6 +2095,13 @@ function plainFromDoc(doc, gloss){
 
 const MD_DOC_MARK = '<!--tenebrae:doc-->';
 const MD_SCENE_MARK = '<!--tenebrae:scene-->';
+// ⁂ does double duty too: between scenes it is the scene break, and inside one
+// it is the author's own asterism. Foreign markdown cannot tell them apart and
+// keeps reading every ⁂ as a break; ours says which is which.
+const MD_AST_MARK = '<!--tenebrae:ast-->';
+// and when chapter titles are left out, a chapter boundary has nothing left to
+// show for itself — two chapters run together under one blank line
+const MD_CHAPTER_MARK = '<!--tenebrae:chapter-->';
 function compile(book, kind){
   // kind: 'md' | 'txt' | 'html'
   const o = book.exportOpts || defaultExportOpts();
@@ -2091,13 +2117,13 @@ function compile(book, kind){
   else if(kind === 'txt') parts.push(book.title.toUpperCase());
   else parts.push(`<h1>${esc(book.title)}</h1>`);
 
-  book.chapters.forEach(ch => {
+  book.chapters.forEach((ch, chIdx) => {
     const chunk = [];
     if(o.chapterTitles){
       if(kind === 'md') chunk.push('## ' + mdEscape(ch.title));
       else if(kind === 'txt') chunk.push(ch.title.toUpperCase());
       else chunk.push(`<h2>${esc(ch.title)}</h2>`);
-    }
+    }else if(kind === 'md' && chIdx > 0) chunk.push(MD_CHAPTER_MARK);
     const sceneParts = ch.scenes.map(s => {
       let body = kind === 'md' ? mdFromDoc(s.doc)
                : kind === 'txt' ? plainFromDoc(s.doc, o.sourceGloss)
@@ -2544,36 +2570,61 @@ blockquote{margin:1em 2em;font-style:italic}
 .tspan[data-block="1"]{display:block;width:fit-content;max-width:100%;margin:.7em 0;vertical-align:baseline}
 .tspan[data-block="1"][data-flow="btt-stave"]{width:100%}
 .tspan[data-block="1"][data-flow="cols-rtl"]{width:100%}`;
-function epubFontEntries(){
-  // every script font the book's spans could need: the sample TTFs, fonts from
-  // an imported JSON pack, and the fonts forged from an imported codex
-  const fonts = [];
-  for(const f of (SAMPLE_CODEX.fonts || [])){
-    try{ fonts.push({ family: f.family, bytes: Uint8Array.from(atob(f.data), c => c.charCodeAt(0)) }); }catch(e){}
-  }
+// which tongues the book actually writes in — nothing else needs a face, a
+// @font-face rule or a manifest entry, and a face nobody reads is dead weight
+// in every copy of the book
+function epubLangsUsed(book){
+  const used = new Set();
+  const scan = html => {
+    if(!html || html.indexOf('tspan') === -1) return;
+    const t = document.createElement('template');
+    t.innerHTML = html;
+    t.content.querySelectorAll('.tspan[data-lang]').forEach(el => used.add(el.dataset.lang));
+  };
+  (book.chapters || []).forEach(c => (c.scenes || []).forEach(sc => scan(sc.doc)));
+  return used;
+}
+// The forged faces are the engine's. A sample or JSON-pack face for a tongue the
+// forge already covers would collide with it at equal specificity and be decided
+// by document order — so it is not emitted at all, and the question never comes up.
+function epubFaceFor(langId){
+  if(omniForged && omniForged[langId]) return { family: omniForged[langId].family, bytes: omniForged[langId].ttf };
   const c = state.codex;
-  if(c && Array.isArray(c.fonts)) for(const f of c.fonts){
-    try{ fonts.push({ family: f.family, bytes: Uint8Array.from(atob(f.data), ch => ch.charCodeAt(0)) }); }catch(e){}
+  const packLang = (c && Array.isArray(c.languages)) ? c.languages.find(l => l.id === langId) : null;
+  if(packLang && packLang.fontFamily && Array.isArray(c.fonts)){
+    const f = c.fonts.find(x => x.family === packLang.fontFamily);
+    if(f) try{ return { family: f.family, bytes: Uint8Array.from(atob(f.data), ch => ch.charCodeAt(0)) }; }catch(e){}
   }
-  if(omniForged) for(const f of Object.values(omniForged)) fonts.push({ family: f.family, bytes: f.ttf });
+  const sample = (SAMPLE_CODEX.languages || []).find(l => l.id === langId);
+  if(sample && sample.fontFamily){
+    const f = (SAMPLE_CODEX.fonts || []).find(x => x.family === sample.fontFamily);
+    if(f) try{ return { family: f.family, bytes: Uint8Array.from(atob(f.data), ch => ch.charCodeAt(0)) }; }catch(e){}
+  }
+  return null;
+}
+function epubFontEntries(used){
+  const fonts = [];
   const seen = new Set();
-  return fonts.filter(f => { if(!f.bytes || seen.has(f.family)) return false; seen.add(f.family); return true; });
+  for(const langId of used){
+    const f = epubFaceFor(langId);
+    if(!f || !f.bytes || seen.has(f.family)) continue;
+    seen.add(f.family);
+    fonts.push(f);
+  }
+  return fonts;
 }
 // a CSS string is single-quoted: an apostrophe in a family name ("Drover's
 // Notch") would otherwise open an unterminated string and swallow the sheet
 function cssq(name){ return String(name).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
-function epubLangCSS(){
+function epubLangCSS(used){
   const rules = [];
-  for(const l of SAMPLE_CODEX.languages) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${cssq(l.fontFamily)}'}`);
-  const c = state.codex;
-  if(c && Array.isArray(c.languages)) for(const l of c.languages)
-    if(l.fontFamily) rules.push(`.tspan[data-lang="${l.id}"]{font-family:'${cssq(l.fontFamily)}'}`);
-  if(omniForged){
-    for(const [langId, f] of Object.entries(omniForged)) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${cssq(f.family)}'}`);
-    if(!omniForged.celan_basic) rules.push(`.tspan[data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes'}`);
+  for(const langId of used){
+    const f = epubFaceFor(langId);
+    if(f) rules.push(`.tspan[data-lang="${langId}"]{font-family:'${cssq(f.family)}'}`);
   }
   return rules.join('\n');
 }
+
 function epubFile(book){
   auricPrime(book, 'book');
   const o = book.exportOpts || defaultExportOpts();
@@ -2593,13 +2644,14 @@ function epubFile(book){
   const modified = new Date(book.updated || book.created || 0).toISOString().replace(/\.\d{3}Z$/, 'Z');
   entries.push({ name: 'OEBPS/nav.xhtml', data: epubNavXHTML(chapters) });
   // the script travels as text; its fonts travel with it
-  const fonts = epubFontEntries();
+  const used = epubLangsUsed(book);
+  const fonts = epubFontEntries(used);
   const faces = fonts.map((f, i) => {
     entries.push({ name: `OEBPS/fonts/f${i + 1}.ttf`, data: f.bytes });
     manifest.push(`<item id="font${i + 1}" href="fonts/f${i + 1}.ttf" media-type="font/ttf"/>`);
     return `@font-face{font-family:'${cssq(f.family)}';src:url('fonts/f${i + 1}.ttf') format('truetype')}`;
   });
-  entries.push({ name: 'OEBPS/style.css', data: faces.join('\n') + '\n' + EPUB_CSS + '\n' + epubLangCSS() });
+  entries.push({ name: 'OEBPS/style.css', data: faces.join('\n') + '\n' + EPUB_CSS + '\n' + epubLangCSS(used) });
   entries.push({ name: 'OEBPS/content.opf', data: `<?xml version="1.0" encoding="UTF-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" xml:lang="en"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:tenebrae:${esc(book.id)}</dc:identifier><dc:title>${esc(book.title)}</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">${modified}</meta></metadata><manifest>${manifest.join('')}</manifest><spine>${spine.join('')}</spine></package>` });
   return zipStore(entries);
 }
@@ -3077,6 +3129,8 @@ function forgeTTF(family, glyphs, cmapPairs){
   let gXMin = 9999, gYMin = 9999, gXMax = -9999, gYMax = -9999, maxPts = 0, maxCtr = 0;
 
   const glyfParts = [], locas = [0], glyphXMin = [];
+  // (the sentinels below are collapsed to zeros if no glyph has an outline —
+  // head's bounding box is read by every consumer and an inverted one is invalid)
   let glyfLen = 0;
   for(const g of glyphs){
     if(!g.contours.length){ glyphXMin.push(0); locas.push(glyfLen); glyfParts.push(new Uint8Array(0)); continue; }
@@ -3113,10 +3167,13 @@ function forgeTTF(family, glyphs, cmapPairs){
   const loca = bytes(locas.flatMap(u32));
   // lsb must equal the glyph's own xMin (head.flags bit 1 asserts exactly that)
   const hmtx = bytes(glyphs.flatMap((g, i) => [...u16(g.advance), ...i16(glyphXMin[i] || 0)]));
+  // a face with no outlines at all — the Auric face at boot, before a single
+  // word has been written — must still ship a valid box, not the sentinels
+  const gBox = (gXMax >= gXMin && gYMax >= gYMin) ? [gXMin, gYMin, gXMax, gYMax] : [0, 0, 0, 0];
   const head = bytes([
     0, 1, 0, 0, 0, 1, 0, 0, ...u32(0), 0x5F, 0x0F, 0x3C, 0xF5, ...u16(3), ...u16(1000),
     ...u32(0), ...u32(0), ...u32(0), ...u32(0), // dates zero: deterministic
-    ...i16(gXMin), ...i16(gYMin), ...i16(gXMax), ...i16(gYMax),
+    ...i16(gBox[0]), ...i16(gBox[1]), ...i16(gBox[2]), ...i16(gBox[3]),
     ...u16(0), ...u16(8), ...i16(2), ...i16(1), ...i16(0),
   ]);
   const hhea = bytes([
@@ -3169,7 +3226,11 @@ function forgeTTF(family, glyphs, cmapPairs){
     strData.push(...enc); off += enc.length;
   }
   const name = bytes([...nm, ...strData]);
-  const post = bytes([0, 3, 0, 0, ...u32(0), ...i16(0), ...i16(0), ...u32(1), ...u32(0), ...u32(0), ...u32(0), ...u32(0)]);
+  // isFixedPitch is a claim about the face, not a formality: every one of these
+  // is proportional except by accident, so read it off the advances
+  const advs = glyphs.map(g => g.advance);
+  const fixedPitch = advs.length > 0 && advs.every(a => a === advs[0]) ? 1 : 0;
+  const post = bytes([0, 3, 0, 0, ...u32(0), ...i16(0), ...i16(0), ...u32(fixedPitch), ...u32(0), ...u32(0), ...u32(0), ...u32(0)]);
 
   const tables = [
     ['OS/2', os2], ['cmap', cmap], ['glyf', glyf], ['head', head],
@@ -3763,7 +3824,12 @@ function omniLangs(w){
 }
 function omniTranslate(w, rawLangId, text){
   const C = w.CODEX;
-  const langId = omniLangId(rawLangId) || 'celan_basic';
+  // A tongue this codex does not have is NOT Celan Basic. Quietly relabelling it
+  // destroys the author's record of what the passage was written in — and
+  // re-exports the wrong tongue, so the record is gone from the file too.
+  // Decline, and let the caller keep the words and say why.
+  const langId = omniLangId(rawLangId);
+  if(!langId || (langId !== 'celan_basic' && !C.TRANS[langId])) return null;
   if(langId === 'celan_basic'){
     const parts = w.translateE2C(String(text));
     const kept = parts.filter(p => p.cel && !p.drop);
@@ -3840,7 +3906,14 @@ function decorateAll(root){
     let upgraded = false;
     spans.forEach(sp => {
       const r = omniTranslate(w, sp.dataset.lang, sp.dataset.src);
-      if(!r) return;
+      if(!r){
+        // the tongue is not in this codex: the words stay, the tongue stays
+        // recorded, and the span says so instead of passing for prose
+        if(sp.dataset.unknown !== '1'){ sp.dataset.unknown = '1'; upgraded = true; }
+        if(sp.textContent !== (sp.dataset.src || '')) sp.textContent = sp.dataset.src || '';
+        return;
+      }
+      if(sp.dataset.unknown){ delete sp.dataset.unknown; upgraded = true; }
       // an imported span arrives as a placeholder from makeTSpan with
       // rom === src (the English). Refreshing only data-scr left that English
       // in data-rom forever, so the tap sheet and the span disagreed and every
@@ -4355,10 +4428,68 @@ function glossHTML(gloss){
     `<span class="g ${g.k ? '' : 'unk'}"><span class="gs">${esc(g.s)}</span><span class="go">${esc(g.o)}${g.k ? '' : ' ·?'}</span></span>`
   ).join('') + `</div>`;
 }
+// the two ways out of a span, shared by the ordinary sheet and the one for a
+// tongue this codex has no writing for
+function tspanRevertItem(el, src){
+  return { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
+    const blk = blockOf(el);
+    let ok = false;
+    try{
+      const rg = rangeAround(el, true);
+      // back inside the bold/italic run the span was sitting in: the words the
+      // author wrote were bold before they were translated
+      ok = edContent.contains(el) &&
+           (!!edReplaceInBlock(rg, chain => inlineWrap(esc(src), chain)) || edApplyText(rangeAround(el, true), src));
+    }catch(e){}
+    if(!ok) el.replaceWith(document.createTextNode(src));
+    normalizeSpacing(blk);
+    persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
+  } };
+}
+function tspanRemoveItem(el){
+  return { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
+    const blk = blockOf(el);
+    let ok = false;
+    try{
+      const rg = rangeAround(el, true);
+      ok = edContent.contains(el) && (!!edReplaceInBlock(rg, () => '') || edApplyText(rangeAround(el, true), ''));
+    }catch(e){}
+    if(!ok) el.remove();
+    normalizeSpacing(blk);
+    persistEditor(); updateCount(); syncEmpty(); flushSave();
+  } };
+}
+function tspanChangeTongueItem(el, langId){
+  return { label: 'Change tongue…', icon: ICONS.rune, onTap: () => {
+    tonguesList().then(({ langs }) => {
+      actionSheet('Render In…', langs.map(l => ({
+        label: l.name, icon: ICONS.rune,
+        checked: l.id === langId || omniLangId(l.id) === omniLangId(langId),
+        onTap: () => { retranslateSpan(el, l.id, null).then(() => { persistEditor(); flushSave(); }); }
+      })));
+    });
+  } };
+}
+// A span whose tongue this codex has no writing for — an older tongue, a pack
+// that is no longer installed, a file from another build. The words are the
+// author's and the tongue is their record of what the passage was: neither is
+// thrown away, and neither is quietly renamed. Say what happened and offer the
+// two ways out.
+function unknownTongueSheet(el, langId, src){
+  actionSheet('Not in this codex', [
+    { note: `<div class="ts-src">\u201C${esc(src)}\u201D</div>`
+          + `<div class="ts-rom">Written in <b>${esc(langId || 'an unnamed tongue')}</b>, which this codex `
+          + `has no writing for. The words are still here and the tongue is still recorded — nothing is lost. `
+          + `Render it in a tongue this codex does have, or put the line back as plain text.</div>` },
+    tspanChangeTongueItem(el, langId),
+    tspanRevertItem(el, src),
+    tspanRemoveItem(el)
+  ]);
+}
 function tspanSheet(el){
   const langId = el.dataset.lang, src = el.dataset.src;
   resolveTranslate(langId, src).then(r => {
-    if(!r){ toast('That tongue is not in this codex'); return; }
+    if(!r){ unknownTongueSheet(el, langId, src); return; }
     const dirAttr = r.dir === 'rtl' ? ' dir="rtl"' : '';
     const omniScr = r.omni ? omniScriptFor(r, omniWin) : null;
     const flowAttr = r.omni && r.flow && r.flow !== 'ltr' ? ` data-flow="${esc(r.flow)}"` : '';
@@ -4374,15 +4505,7 @@ function tspanSheet(el){
           retranslateSpan(el, null, v).then(() => { persistEditor(); updateCount(); flushSave(); });
         });
       } },
-    { label: 'Change tongue…', icon: ICONS.rune, onTap: () => {
-        tonguesList().then(({ langs }) => {
-          actionSheet('Render In…', langs.map(l => ({
-            label: l.name, icon: ICONS.rune,
-            checked: l.id === langId || omniLangId(l.id) === omniLangId(langId),
-            onTap: () => { retranslateSpan(el, l.id, null).then(() => { persistEditor(); flushSave(); }); }
-          })));
-        });
-      } },
+    tspanChangeTongueItem(el, langId),
     { label: `Script size — ${({ s: 'Small', l: 'Large', xl: 'Huge' })[el.dataset.size] || 'Normal'}`, icon: ICONS.rune, onTap: () => {
         const order = ['', 's', 'l', 'xl'];
         actionSheet('Script Size', order.map(k => ({
@@ -4404,31 +4527,8 @@ function tspanSheet(el){
         try{ navigator.clipboard.writeText(r.romanization); toast('Romanization copied'); }
         catch(e){ toast('Couldn\u2019t copy'); }
       } },
-    { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
-        const blk = blockOf(el);
-        let ok = false;
-        try{
-          const rg = rangeAround(el, true);
-          // back inside the bold/italic run the span was sitting in: the words
-          // the author wrote were bold before they were translated
-          ok = edContent.contains(el) &&
-               (!!edReplaceInBlock(rg, chain => inlineWrap(esc(src), chain)) || edApplyText(rangeAround(el, true), src));
-        }catch(e){}
-        if(!ok) el.replaceWith(document.createTextNode(src));
-        normalizeSpacing(blk);
-        persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
-      } },
-    { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
-        const blk = blockOf(el);
-        let ok = false;
-        try{
-          const rg = rangeAround(el, true);
-          ok = edContent.contains(el) && (!!edReplaceInBlock(rg, () => '') || edApplyText(rangeAround(el, true), ''));
-        }catch(e){}
-        if(!ok) el.remove();
-        normalizeSpacing(blk);
-        persistEditor(); updateCount(); syncEmpty(); flushSave();
-      } }
+    tspanRevertItem(el, src),
+    tspanRemoveItem(el)
     ]);
   });
 }
@@ -5798,6 +5898,12 @@ function textishBlocks(raw){
       continue;
     }
     blankRun = 0;
+    // ours, and marked as such: an asterism the author put INSIDE a scene, not
+    // the break between two of them. Tested before SEP_TEXT, which would eat it.
+    if(t.indexOf(MD_AST_MARK) > -1 && /^\s*⁂\s*$/.test(t.split(MD_AST_MARK).join(''))){
+      flushP(); flushQ(); blocks.push({ k: 'ast' }); prevBlank = false; continue;
+    }
+    if(t === MD_CHAPTER_MARK){ flushP(); flushQ(); blocks.push({ k: 'chbreak', title: '' }); prevBlank = true; continue; }
     if(SEP_TEXT.test(t)){ flushP(); flushQ(); blocks.push({ k: 'sep' }); prevBlank = true; continue; }
     if(t === MD_DOC_MARK){ flushP(); flushQ(); ourMarkdown = true; blocks.push({ k: 'ourmd' }); continue; }
     if(t === MD_SCENE_MARK){ flushP(); flushQ(); nextHeadIsScene = true; continue; }
@@ -6161,20 +6267,30 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   let title = null;
   const ti = blocks.findIndex(b => b.k === 'title');
   if(ti > -1){ title = plainOfHTML(blocks[ti].html); blocks = blocks.filter((_, x) => x !== ti); }
-  let levels = [...new Set(blocks.filter(b => b.k === 'h').map(b => b.level))].sort((a, b) => a - b);
+  // A heading our own markdown marked as a scene title is a SCENE, whatever its
+  // level. Letting it into the level set collapses chapterLevel onto it when
+  // chapter titles were left out of the export, and every scene then opens a
+  // chapter of its own.
+  const headBlocks = blocks.filter(b => b.k === 'h' && !(ourMd && b.scene));
+  let levels = [...new Set(headBlocks.map(b => b.level))].sort((a, b) => a - b);
   let chapterLevel = null, sceneLevel = null;
-  if(!hasChbreak){
-    if(title == null && levels.length){
-      const L = levels[0];
-      const heads = blocks.filter(b => b.k === 'h' && b.level === L);
-      const firstHeadIdx = blocks.indexOf(heads[0]);
-      const firstBodyIdx = blocks.findIndex(b => b.k === 'p' || b.k === 'q' || b.k === 'li');
-      if(heads.length === 1 && (firstBodyIdx === -1 || firstHeadIdx < firstBodyIdx)){
-        title = plainOfHTML(heads[0].html);
-        blocks = blocks.filter(b => b !== heads[0]);
-        levels = levels.slice(1);
-      }
+  // A lone top-level heading standing before any prose is the book's title,
+  // whether or not the file also carries explicit chapter breaks — our own
+  // markdown writes both whenever chapter titles are left out of the export,
+  // and skipping this left the title to be read as an in-scene heading, which
+  // opened a phantom scene in front of the first real one.
+  if(title == null && levels.length){
+    const L = levels[0];
+    const heads = headBlocks.filter(b => b.level === L);
+    const firstHeadIdx = blocks.indexOf(heads[0]);
+    const firstBodyIdx = blocks.findIndex(b => b.k === 'p' || b.k === 'q' || b.k === 'li');
+    if(heads.length === 1 && (firstBodyIdx === -1 || firstHeadIdx < firstBodyIdx)){
+      title = plainOfHTML(heads[0].html);
+      blocks = blocks.filter(b => b !== heads[0]);
+      levels = levels.slice(1);
     }
+  }
+  if(!hasChbreak){
     chapterLevel = levels.length ? levels[0] : null;
     sceneLevel = levels.length > 1 ? levels[1] : null;
   }else{
@@ -6196,9 +6312,9 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   for(const b of blocks){
     if(b.k === 'chbreak'){ openCh(b.title); continue; }
     if(b.k === 'h'){
+      if(mode === 'mark' && b.scene){ openSc(plainOfHTML(b.html)); continue; }
       if(!hasChbreak && b.level === chapterLevel){ openCh(plainOfHTML(b.html)); continue; }
       if(mode === 'mark'){
-        if(b.scene){ openSc(plainOfHTML(b.html)); continue; }
         // unmarked heading in our own markdown: in-scene prose heading
         put({ k: b.level <= (chapterLevel != null ? chapterLevel : 2) + 1 ? 'h2' : 'h3', html: b.html });
         continue;
@@ -6209,6 +6325,7 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
       put({ k: b.level <= base + 1 ? 'h2' : 'h3', html: b.html });
       continue;
     }
+    if(b.k === 'ast'){ put({ k: 'ast' }); continue; }   // ours, and marked as in-scene
     if(b.k === 'sep'){
       if(mode === 'sep' || mode === 'mark'){ if(sc && sc.blocks.length) openSc(''); }
       else if(!b.soft) put({ k: 'ast' });
@@ -6225,10 +6342,9 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
       if(!doc && !s.title) return;
       scenes.push({ title: s.title, doc, words: htmlWords(doc) });
     });
-    if(!scenes.length){
-      if(!c.title) return;
-      scenes.push({ title: '', doc: '', words: 0 });
-    }
+    // a chapter the author left empty comes back empty: inventing a scene for it
+    // means the file no longer round-trips, and the phantom is not theirs
+    if(!scenes.length && !c.title) return;
     out.push({ title: c.title, scenes });
   });
   if(!out.length) out.push({ title: 'Chapter 1', scenes: [{ title: '', doc: '', words: 0 }] });
@@ -6238,7 +6354,7 @@ function structureFromBlocks(rawBlocks, opts, fallbackTitle){
   return {
     title: (title || fallbackTitle || 'Imported Manuscript').trim(),
     chapters: out,
-    meta: { mode: mode === 'mark' ? 'h' : mode, ourMd, hardSep, softSep, sceneLevel, chapterLevel, hasChbreak }
+    meta: { mode, ourMd, hardSep, softSep, sceneLevel, chapterLevel, hasChbreak }
   };
 }
 function blocksToDoc(blocks){
@@ -6327,11 +6443,16 @@ function importPreview(){
 
   const canSep = model.meta.hardSep || model.meta.softSep;
   const canH = model.meta.sceneLevel != null;
-  const segNeeded = (canSep ? 1 : 0) + (canH ? 1 : 0) >= 1 && (canSep || canH);
+  // our own file says outright which headings are scene titles — that is its own
+  // rule, and naming it "Headings" meant the preselected button was a lie: press
+  // it and the book you were shown turns into a different one
+  const canMark = !!model.meta.ourMd;
+  const segNeeded = canSep || canH || canMark;
   const sepLabel = model.meta.hardSep ? '⁂ Separators' : 'Blank gaps';
   const segHTML = segNeeded ? `
     <div class="seg-lbl">Split scenes at</div>
     <div class="seg" id="imp-seg">
+      ${canMark ? `<button data-mode="mark" class="${model.meta.mode === 'mark' ? 'on' : ''}">Tenebrae marks</button>` : ''}
       ${canSep ? `<button data-mode="sep" class="${model.meta.mode === 'sep' ? 'on' : ''}">${sepLabel}</button>` : ''}
       ${canH ? `<button data-mode="h" class="${model.meta.mode === 'h' ? 'on' : ''}">Headings</button>` : ''}
       <button data-mode="none" class="${model.meta.mode === 'none' ? 'on' : ''}">Don’t split</button>

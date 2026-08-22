@@ -191,10 +191,14 @@ if(auricHref){
   shippedBbox = R2.bbox;
   console.log('epub-embedded Auric face:', JSON.stringify(R2.bbox), 'glyphs=' + R2.numGlyphs, 'sane=' + R2.bboxSane);
 }
-ck('SETUP: this session never wrote an Auric word, yet its EPUB still embeds the Auric face',
-   !!auricHref && auricWords === 0, `words=${auricWords} href=${auricHref}`);
-ck('the Auric face an EPUB actually ships has a well-formed head bbox',
-   !!shippedBbox && shippedBbox[0] <= shippedBbox[2] && shippedBbox[1] <= shippedBbox[3],
+// A face nobody reads is dead weight in every copy of the book, and the empty
+// Auric face was the worst of them: two glyphs, no outlines, and — until the
+// forge learned to clamp it — an inverted head bounding box. An EPUB now ships
+// only the faces the book's own spans call for.
+ck('an EPUB does NOT embed a face the book never writes in',
+   auricWords === 0 && !auricHref, `words=${auricWords} href=${auricHref}`);
+ck('and if one is shipped, its head bbox is well formed',
+   !auricHref || (!!shippedBbox && shippedBbox[0] <= shippedBbox[2] && shippedBbox[1] <= shippedBbox[3]),
    JSON.stringify(shippedBbox));
 
 ck('no page exceptions', errors.length === 0 && P2.errors.length === 0, [...errors, ...P2.errors].slice(0, 3).join(' | '));
