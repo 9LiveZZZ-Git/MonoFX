@@ -2635,7 +2635,9 @@ function epubLangCSS(used){
 }
 
 function epubFile(book){
-  auricPrime(book, 'book');
+  return auricExportOrder(book, 'book', null, () => epubFileInner(book));
+}
+function epubFileInner(book){
   const o = book.exportOpts || defaultExportOpts();
   const chapters = book.chapters.filter(ch => ch.title || ch.scenes.some(s => (s.doc && s.doc.trim()) || s.title));
   const entries = [
@@ -2805,7 +2807,9 @@ const PDF_STYLE = {
   li: { size: PDF_BODY, lead: PDF_LEAD, indent: 20, before: 0, after: 2 },
 };
 function pdfFile(book, scope, scene){
-  auricPrime(book, scope, scene);
+  return auricExportOrder(book, scope, scene, () => pdfFileInner(book, scope, scene));
+}
+function pdfFileInner(book, scope, scene){
   const o = book.exportOpts || defaultExportOpts();
   const P = PDF_PAGE;
   const colW = P.w - P.m * 2;
@@ -3343,30 +3347,44 @@ function auricEnsure(words){
       added = true;
     }catch(e){}
   }
-  if(added){
-    // Codepoints run in sorted order, never arrival order. Minting by arrival
-    // makes the mapping a function of which button the author pressed first —
-    // export one scene, then the book, and the same book comes out with
-    // different bytes. Sorted, it is a function of WHICH words exist, and two
-    // exports of the same state are byte for byte the same file.
-    A.order.sort();
-    A.order.forEach((word, i) => { A.words[word].code = AURIC_BASE + i; });
-    auricRebuild();
-  }
+  if(added) auricRebuild();
   return added;
 }
-// Sorted numbering means a new word renumbers its neighbours, so the whole
-// vocabulary has to be settled BEFORE a file is written — otherwise the first
-// scene is stamped with codepoints the last scene moves. Compiling a doc is
-// what mints its words, so one silent pass over everything that will be written
-// is the priming pass.
-function auricPrime(book, scope, scene){
-  if(!omniWin || !book) return;
-  const docs = [];
-  if(scope === 'scene' && scene) docs.push(scene.doc);
-  else (book.chapters || []).forEach(c => (c.scenes || []).forEach(sc => docs.push(sc.doc)));
-  (book.cards || []).forEach(c => docs.push(c.notes));
-  for(const d of docs){ try{ if(d && d.indexOf('tspan') > -1) syncScriptDoc(d); }catch(e){} }
+// Two rules pull in opposite directions here, and both are load-bearing.
+//
+// A word's codepoint must never move once it is minted: the same input has to
+// render the same way for the whole session, whatever else has been written
+// since. That makes the LIVE mapping arrival-ordered — mint as the words come.
+//
+// But arrival order is a record of which buttons the author pressed, and that
+// must not reach a FILE: export one scene, then the book, and the same book
+// would come out with different bytes than a cold export of the same state.
+//
+// So a file gets its own mapping. For the length of the export the Auric map is
+// swapped for an empty one, filled by compiling the very documents that are
+// about to be written, in document order — a pure function of the book, with no
+// history in it — and the live map is put back untouched afterwards. The
+// export's face never reaches the page: auricRebuild skips the FontFace swap
+// while this is in force, or an async font load could land after the restore
+// and leave every rune on screen pointing at the wrong word.
+let auricExporting = false;
+function auricExportOrder(book, scope, scene, build){
+  const A = omniForged && omniForged.celan_basic;
+  if(!A || !omniWin || !book) return build();
+  const saved = { words: A.words, order: A.order, ttf: A.ttf, codeMap: A.codeMap };
+  A.words = {}; A.order = [];
+  auricExporting = true;
+  try{
+    const docs = [];
+    if(scope === 'scene' && scene) docs.push(scene.doc);
+    else (book.chapters || []).forEach(c => (c.scenes || []).forEach(sc => docs.push(sc.doc)));
+    (book.cards || []).forEach(c => docs.push(c.notes));
+    for(const d of docs){ try{ if(d && d.indexOf('tspan') > -1) syncScriptDoc(d); }catch(e){} }
+    return build();
+  }finally{
+    A.words = saved.words; A.order = saved.order; A.ttf = saved.ttf; A.codeMap = saved.codeMap;
+    auricExporting = false;
+  }
 }
 function auricRebuild(){
   const A = omniForged && omniForged.celan_basic;
@@ -3380,18 +3398,13 @@ function auricRebuild(){
   A.ttf = forgeTTF(A.family, glyphs, pairs);
   A.codeMap = { 0x20: { gid: 1, adv: 340 } };
   A.order.forEach((word, i) => { A.codeMap[A.words[word].code] = { gid: i + 2, adv: A.words[word].glyph.advance }; });
+  if(auricExporting) return;   // an export's mapping is the file's, not the page's
   try{
     if(auricFace) document.fonts.delete(auricFace);
     auricFace = new FontFace(A.family, A.ttf.buffer.slice(A.ttf.byteOffset, A.ttf.byteOffset + A.ttf.byteLength));
     auricFace.load().then(f => document.fonts.add(f)).catch(() => {});
   }catch(e){}
-  // a renumber makes every rune already on screen point at the wrong word
-  clearTimeout(auricSync);
-  auricSync = setTimeout(() => {
-    try{ decorateAll(edContent); decorateAll(document.body); }catch(e){}
-  }, 0);
 }
-let auricSync = null;
 function auricText(words){
   const A = omniForged && omniForged.celan_basic;
   if(!A) return null;

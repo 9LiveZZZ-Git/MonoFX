@@ -153,6 +153,8 @@ function unzipStored(buf){
   return files;
 }
 const files = unzipStored(epub);
+const auricFileEarly = () => (/@font-face\{font-family:'Tenebrae Auric Runes';src:url\('([^']+)'\)/
+  .exec(Buffer.from(files.get('OEBPS/style.css') || '').toString('utf8')) || [])[1];
 const ch1 = Buffer.from(files.get('OEBPS/ch1.xhtml') || '').toString('utf8');
 await writeFile(OUT + '/ch1.xhtml', ch1);
 const spanRe = /<span class="tspan"([^>]*)>([\s\S]*?)<\/span>/g;
@@ -176,25 +178,91 @@ const decoded = eSpans.map(s => ({
   words: [...s.text].filter(c => c.charCodeAt(0) >= 0xE800).map(c => c2w[c.charCodeAt(0)] || `?U+${c.charCodeAt(0).toString(16)}`)
 }));
 for(const d of decoded) console.log(`   "${d.src}" -> ${d.words.join(' ')}`);
-// expected: the codex's own romanization words, cleaned the carver's way
+// The EPUB carries its own font, and a reader has nothing else: the only
+// question that means anything about a FILE is whether the codepoint in its
+// text draws the rune for the right word. Decoding the file's codepoints
+// through the SESSION's map answers a different question — an export builds its
+// own ordering, on purpose, so that two exports of the same state are the same
+// bytes whatever the session did first. So compare OUTLINES: the glyph the
+// embedded face draws for each codepoint, against the glyph the live face draws
+// for the word that codepoint is supposed to be.
 const expected = await page.evaluate(async srcs => {
   const out = {};
   for(const src of srcs){
     const r = await window.tenebrae.translate2('celan_basic', src);
+    // minting the words is the point: the live face must be able to draw them
+    window.tenebrae._forge.textForToks('celan_basic', r.toks);
     out[src] = r.romanization.split(/\s+/).filter(Boolean)
       .map(w => w.replace(/[^\wéäí'-]/g, '').toLowerCase()).filter(Boolean);
   }
   return out;
 }, eSpans.map(s => s.src));
 console.log('expected:', JSON.stringify(expected));
-ck('EXPORT TRUTH: a scene never opened this session still exports the RIGHT Auric words',
-   decoded.every(d => JSON.stringify(d.words) === JSON.stringify(expected[d.src])),
-   JSON.stringify(decoded.map(d => `${d.src}: ${d.words.join(' ')}`)));
+
+const live = await page.evaluate(() => {
+  const A = window.tenebrae._forge.map().celan_basic;
+  let bin = '';
+  for(const b of A.ttf) bin += String.fromCharCode(b);
+  return { ttf: btoa(bin), codes: Object.fromEntries(A.order.map(w => [w, A.words[w].code])) };
+});
+await writeFile(OUT + '/live.ttf', Buffer.from(live.ttf, 'base64'));
+
+// pair every codepoint the file writes with the live codepoint for the word it
+// should be — same order, same length, or the run itself is wrong
+const pairs = [];
+let shapeOK = true, shapeWhy = '';
+for(const sp of eSpans){
+  const fileCodes = [...sp.text].filter(c => c.charCodeAt(0) >= 0xE800).map(c => c.charCodeAt(0));
+  const words = expected[sp.src] || [];
+  if(fileCodes.length !== words.length){
+    shapeOK = false;
+    shapeWhy += `"${sp.src}": ${fileCodes.length} runes for ${words.length} words; `;
+    continue;
+  }
+  words.forEach((w, i) => {
+    if(live.codes[w] == null){ shapeOK = false; shapeWhy += `"${w}" never minted live; `; return; }
+    pairs.push([fileCodes[i], live.codes[w], w, sp.src]);
+  });
+}
+
+let truthOK = false, truthDetail = shapeWhy || 'no auric font entry';
+if(shapeOK && auricFileEarly()){
+  await writeFile(OUT + '/auric.ttf', files.get('OEBPS/' + auricFileEarly()));
+  const py = `
+import json
+from fontTools.ttLib import TTFont
+from fontTools.pens.recordingPen import RecordingPen
+def outline(path, code):
+    f = TTFont(path)
+    cm = f.getBestCmap()
+    if code not in cm: return None
+    pen = RecordingPen()
+    f.getGlyphSet()[cm[code]].draw(pen)
+    return repr(pen.value)
+pairs = ${JSON.stringify(pairs.map(p => [p[0], p[1], p[2], p[3]]))}
+bad = []
+for fc, lc, word, src in pairs:
+    a = outline("${OUT}/auric.ttf", fc)
+    b = outline("${OUT}/live.ttf", lc)
+    if a is None: bad.append(word + ": U+%04X not in the EPUB face" % fc)
+    elif b is None: bad.append(word + ": U+%04X not in the live face" % lc)
+    elif a != b: bad.append(word + ": the EPUB draws a different rune (U+%04X vs live U+%04X)" % (fc, lc))
+print(json.dumps({"checked": len(pairs), "bad": bad}))
+`;
+  await writeFile(OUT + '/outline.py', py);
+  const out2 = execFileSync('python3', [OUT + '/outline.py'], { encoding: 'utf8' }).trim();
+  console.log('outline check:', out2);
+  const j2 = JSON.parse(out2);
+  truthOK = j2.checked > 0 && j2.bad.length === 0;
+  truthDetail = out2;
+}
+ck('EXPORT TRUTH: a scene never opened this session still exports the RIGHT Auric runes',
+   truthOK, truthDetail);
 
 // cmap coverage of the embedded Auric face against every code the EPUB uses
 const fontNames = [...files.keys()].filter(n => /^OEBPS\/fonts\//.test(n));
 const css = Buffer.from(files.get('OEBPS/style.css') || '').toString('utf8');
-const auricFile = (/@font-face\{font-family:'Tenebrae Auric Runes';src:url\('([^']+)'\)/.exec(css) || [])[1];
+const auricFile = auricFileEarly();
 console.log('fonts in epub:', fontNames.length, '| auric =', auricFile);
 let cmapOK = false, cmapDetail = 'no auric font entry';
 if(auricFile){
