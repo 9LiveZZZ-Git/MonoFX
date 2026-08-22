@@ -136,7 +136,11 @@ const bBase = await snap();
 console.log('\n=== B: insert -> revert to plain text, x5   base text:', show(bBase.text));
 const bRows = [];
 for(let i = 1; i <= 5; i++){
-  await applySel(SEL);
+  // by TEXT, not by the #sel element: a revert rewrites the block in one
+  // command, so the author's words come back inside a bold run but not inside
+  // the same <b> node they left. Element identity is not the contract; the
+  // characters and the formatting are.
+  await applySel({ text: 'the old king' });
   const made = await translateVia('Kildaren');
   if(!made){ bRows.push({ i, fail: 'no span' }); break; }
   await sheetAction('Revert to plain text');

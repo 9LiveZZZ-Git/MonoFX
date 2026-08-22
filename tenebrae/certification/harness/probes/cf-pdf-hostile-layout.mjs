@@ -210,24 +210,35 @@ if(V){
 }
 
 /* ---- the 199-char unbreakable word: does its INK stay on the page? ----
-   putAtom (step1.html:2818) flushes when the line is full, but an atom wider
-   than the whole column is pushed anyway — there is nothing to break on. The
-   PDF records only the start x, so measure the run's own width the same way the
-   writer does (canvas, the base-14 Times stack) and add it. */
-const longWord = await page.evaluate(w => {
+   There is nothing in it to break on, so the writer has to break it somewhere
+   itself. Measure every piece it actually drew — the PDF records only a start
+   x, so each literal's own width goes on with the same canvas + base-14 Times
+   stack the writer uses — and check two things: no piece runs off the paper,
+   and the pieces still spell the whole word. */
+const rawA = a1.toString('latin1');
+const lwRuns = [];
+{
+  const re = /Tf 1 0 0 1 ([\d.-]+) ([\d.-]+) Tm \(([^)\\]*)\) Tj/g;
+  let m;
+  while((m = re.exec(rawA))) if(m[3].length >= 12 && LONGWORD.indexOf(m[3]) > -1) lwRuns.push({ x: +m[1], s: m[3] });
+}
+const longWord = await page.evaluate(({ w, pieces }) => {
   const c = document.createElement('canvas').getContext('2d');
   c.font = `11px 'Times New Roman','Liberation Serif','Nimbus Roman',Times,serif`;
-  return { width: c.measureText(w).width, avail: (595.28 - 144) * 0.97 };
-}, LONGWORD);
-const rawA = a1.toString('latin1');
-const lwRun = new RegExp('Tf 1 0 0 1 ([\\d.-]+) ([\\d.-]+) Tm \\(' + LONGWORD.slice(0, 40) + '[^)]*\\) Tj').exec(rawA);
+  return { width: c.measureText(w).width, avail: (595.28 - 144) * 0.97,
+           parts: pieces.map(p => c.measureText(p).width) };
+}, { w: LONGWORD, pieces: lwRuns.map(r => r.s) });
 console.log(`long word: ${LONGWORD.length} chars, ${longWord.width.toFixed(1)}pt wide, column avail ${longWord.avail.toFixed(1)}pt`,
-            '| drawn at x =', lwRun ? lwRun[1] : 'NOT FOUND');
+            '| drawn in', lwRuns.length, 'piece(s) at x =', JSON.stringify(lwRuns.map(r => r.x)));
 ck('precondition: the 199-character word is wider than the whole text column',
    longWord.width > longWord.avail, `${longWord.width.toFixed(1)} > ${longWord.avail.toFixed(1)}`);
-ck('the unbreakable word\'s ink stays inside the MediaBox',
-   !!lwRun && (+lwRun[1] + longWord.width) <= 595.28,
-   lwRun ? `starts at ${lwRun[1]}, ends at ${(+lwRun[1] + longWord.width).toFixed(1)}, page is 595.28 wide` : 'run not found');
+ck('the unbreakable word is drawn at all', lwRuns.length > 0, JSON.stringify(lwRuns.map(r => r.s.length)));
+ck('every piece of the unbreakable word stays inside the MediaBox',
+   lwRuns.length > 0 && lwRuns.every((r, i) => r.x + longWord.parts[i] <= 595.28),
+   JSON.stringify(lwRuns.map((r, i) => [r.x.toFixed(1), (r.x + longWord.parts[i]).toFixed(1)])));
+ck('the pieces still spell the whole word — nothing dropped at the break',
+   lwRuns.map(r => r.s).join('') === LONGWORD,
+   lwRuns.map(r => r.s).join('').length + ' of ' + LONGWORD.length + ' characters');
 
 // /F4 usage + a raw look at the nested run
 const raw = a1.toString('latin1');

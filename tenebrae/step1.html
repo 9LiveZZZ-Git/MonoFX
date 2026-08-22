@@ -1018,8 +1018,6 @@ function flushSave(){
 window.addEventListener('pagehide', flushSave);
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') flushSave(); });
 
-// the landmark placeTSpan parks at a selection's edges — see markPut below
-const TS_MARK = '﻿';
 /* ================= sanitizer ================= */
 const BLOCK_KEEP = new Set(['P','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','H2','H3','BLOCKQUOTE','UL','OL','LI']);
 function sanitizeHTML(html){
@@ -1110,15 +1108,6 @@ function sanitizeHTML(html){
                    !n.querySelector('br,.tspan,.asterism'));
     if(!husks.length) break;
     husks.forEach(n => n.remove());
-  }
-  // placeTSpan's landmarks are blanked in the live DOM, never removed, so the
-  // browser's undo stack keeps working. Nothing should reach here — but a throw
-  // mid-placement would leave one, and an invisible character in a manuscript
-  // is exactly the kind of thing nobody ever finds again.
-  {
-    const w = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT);
-    let n;
-    while((n = w.nextNode())) if(n.nodeValue.indexOf(TS_MARK) > -1) n.nodeValue = n.nodeValue.split(TS_MARK).join('');
   }
   // contenteditable leaves the first typed line as a bare top-level run;
   // exporters can only see paragraphs, so every stray inline run gets a <p>
@@ -1471,8 +1460,19 @@ function currentScene(){
 
 function persistEditor(){
   const s = currentScene(); if(!s) return;
-  s.title = edTitle.textContent.trim();
-  s.doc = sanitizeHTML(edContent.innerHTML);
+  const title = edTitle.textContent.trim();
+  const doc = sanitizeHTML(edContent.innerHTML);
+  // Opening a scene is not editing it. Stamping on every persist moved the
+  // book's "last edited" whenever the author so much as looked at a scene —
+  // and the PDF takes its CreationDate from that stamp, so the same manuscript
+  // came out as different bytes depending on what had been opened first.
+  // The script run is derived, not authored: the alphabets are stable, but
+  // Auric codepoints are minted per session, so the same scene serializes
+  // differently in every session. Compare what the author actually wrote.
+  const authored = h => String(h || '').replace(/ data-scr="[^"]*"/g, '').replace(/[\uE000-\uF8FF]/g, '');
+  if(title === s.title && authored(doc) === authored(s.doc)) return;
+  s.title = title;
+  s.doc = doc;
   s.words = countWords(textOf(edContent));
   s.updated = Date.now();
   const b = bookById(currentBookId); if(b) b.updated = Date.now();
@@ -2227,7 +2227,15 @@ function exportSheet(scope){
         if(isBook) download(fileSafe(b.title) + '.docx', docxFile(b, 'book'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.docx', docxFile(b, 'scene', s), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); }
       } },
-    { label: 'Download PDF (.pdf)', icon: ICONS.book, onTap: () => {
+    { label: 'Download PDF (.pdf)', icon: ICONS.book, onTap: async () => {
+        // The PDF carries the outlines itself — that is its whole reason for
+        // existing — so it must never be built before the forge has woken. One
+        // tap too early on a slow phone produced a file with no script at all,
+        // every span silently demoted to italic romanization, and no warning.
+        if(omniPack()){
+          try{ const w = await ensureOmni(); if(w) forgeOmniFonts(w); }
+          catch(e){ toast('The codex is still waking — try again in a moment'); return; }
+        }
         try{
           if(isBook) download(fileSafe(b.title) + '.pdf', pdfFile(b, 'book'), 'application/pdf');
           else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.pdf', pdfFile(b, 'scene', s), 'application/pdf'); }
@@ -2527,7 +2535,7 @@ blockquote{margin:1em 2em;font-style:italic}
 .tspan{font-style:normal}
 .tspan[dir="rtl"]{unicode-bidi:isolate}
 .tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}
-.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:var(--tsrun,22em);line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
+.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:none;line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:normal;word-break:keep-all}
 .tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.75;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}
 /* script size + full-width, author-controlled from the span sheet */
 .tspan[data-size="s"]{font-size:.9em}
@@ -2567,6 +2575,7 @@ function epubLangCSS(){
   return rules.join('\n');
 }
 function epubFile(book){
+  auricPrime(book, 'book');
   const o = book.exportOpts || defaultExportOpts();
   const chapters = book.chapters.filter(ch => ch.title || ch.scenes.some(s => (s.doc && s.doc.trim()) || s.title));
   const entries = [
@@ -2715,15 +2724,6 @@ function pdfScriptCells(run){
   if(cur.length) words.push(cur);
   return words;
 }
-function pdfScriptWidth(run, size){
-  const words = pdfScriptCells(run);
-  const s = size * run.scale;
-  if(run.flow === 'cols-rtl' || run.flow === 'btt-stave') return 0; // own block
-  const gap = s * 0.34; // the space between words
-  let w = 0;
-  words.forEach((wd, i) => { if(i) w += gap; wd.forEach(c => w += c.adv / 1000 * s); });
-  return w;
-}
 
 /* ---- byte buffer: PDF is a binary format with an offset table, so every
        chunk is counted in bytes, never in characters ---- */
@@ -2744,6 +2744,7 @@ const PDF_STYLE = {
   li: { size: PDF_BODY, lead: PDF_LEAD, indent: 20, before: 0, after: 2 },
 };
 function pdfFile(book, scope, scene){
+  auricPrime(book, scope, scene);
   const o = book.exportOpts || defaultExportOpts();
   const P = PDF_PAGE;
   const colW = P.w - P.m * 2;
@@ -2765,30 +2766,49 @@ function pdfFile(book, scope, scene){
     used[lang] = true;
     page.ops.push(`BT /S_${lang} ${s.toFixed(2)} Tf 1 0 0 1 ${x.toFixed(2)} ${base.toFixed(2)} Tm ${pdfHex(cells.map(c => c.gid))} Tj ET`);
   };
-  // horizontal script run, inline with the prose
-  const drawScriptInline = (run, x, base, size) => {
+  // A horizontal script run is set word by word, each word its own atom, so a
+  // sentence wraps at the margin like prose instead of running off the paper.
+  // rtl reverses the words and the cells inside them, then reads left to right
+  // like every other line — the same trick the screen uses.
+  const scriptAtoms = (run, size) => {
     const s = size * run.scale, words = pdfScriptCells(run), gap = s * 0.34;
-    let cx = x;
     const seq = run.flow === 'rtl' ? words.slice().reverse() : words;
-    for(const wd of seq){
+    return seq.map((wd, i) => {
       const cells = run.flow === 'rtl' ? wd.slice().reverse() : wd;
-      drawGlyphs(run.lang, cells, cx, base, s);
-      cells.forEach(c => cx += c.adv / 1000 * s);
-      cx += gap;
-    }
+      const w = cells.reduce((n, c) => n + c.adv / 1000 * s, 0);
+      return { k: 'g', lang: run.lang, cells, s, w: w + (i < seq.length - 1 ? gap : 0), ink: w };
+    });
   };
   // vertical scripts get their own block: an inline column nine ems tall would
   // wreck a printed page, and the codex sets them as blocks anyway
-  const scriptBlockSize = (run, size) => {
-    const s = size * run.scale, words = pdfScriptCells(run);
-    const pitch = (run.flow === 'btt-stave' ? 1.75 : 1.28) * s;
+  // A block of columns has two edges to respect that the screen does not: the
+  // right margin, and the bottom of the paper. Columns wrap into rows at the
+  // margin — each row keeping its own ceiling or ground, exactly as a new line
+  // of prose does — and if the deepest word is taller than the page will take,
+  // the whole block is set smaller rather than drawn off the bottom. One column
+  // per word survives both: a word is never cut in half.
+  const PAGE_BODY_H = PDF_PAGE.h - PDF_PAGE.m * 2;
+  const scriptBlockSize = (run, size, maxW) => {
+    const words = pdfScriptCells(run);
     const deepest = Math.max(1, ...words.map(w => w.length));
-    return { s, words, pitch, w: words.length * pitch, h: deepest * s + s * 0.3 };
+    let s = size * run.scale;
+    const fit = (PAGE_BODY_H - 18) / (deepest + 0.3);
+    if(s > fit) s = fit;
+    const pitch = (run.flow === 'btt-stave' ? 1.75 : 1.28) * s;
+    const perRow = Math.max(1, Math.floor((maxW || (PDF_PAGE.w - PDF_PAGE.m * 2)) / pitch));
+    const rows = [];
+    for(let i = 0; i < words.length; i += perRow) rows.push(words.slice(i, i + perRow));
+    if(!rows.length) rows.push([]);
+    const rowH = rows.map(r => Math.max(1, ...r.map(w => w.length), 1) * s + s * 0.3);
+    const gap = s * 0.6;
+    return { s, words, pitch, rows, rowH,
+             w: Math.min(words.length, perRow) * pitch,
+             h: rowH.reduce((a, b) => a + b, 0) + (rows.length - 1) * gap, gap };
   };
-  const drawScriptBlock = (run, x, top, size) => {
-    const { s, words, pitch } = scriptBlockSize(run, size);
-    const ground = top - Math.max(1, ...words.map(w => w.length)) * s;
-    words.forEach((wd, ci) => {
+  const drawScriptRow = (run, row, x, top, s, pitch) => {
+    const deep = Math.max(1, ...row.map(w => w.length), 1);
+    const ground = top - deep * s;
+    row.forEach((wd, ci) => {
       const cx = x + ci * pitch;
       wd.forEach((cell, j) => {
         // cols-rtl hangs from a common ceiling, btt-stave stands on common
@@ -2823,13 +2843,43 @@ function pdfFile(book, scope, scene){
       if(pendingBullet){ drawText(P.m + 4, y, pendingBullet, st.size, {}); pendingBullet = null; }
       let x = left;
       for(const a of atoms){
-        if(a.k === 's') drawScriptInline(a.run, x, y, st.size);
+        if(a.k === 'g') drawGlyphs(a.lang, a.cells, x, y, a.s);
         else drawText(x, y, a.s, st.size, a.m);
         x += a.w;
       }
       atoms = [];
     };
     const putAtom = a => {
+      // Nothing wider than the column may go onto a line. A word longer than the
+      // measure — a 193-character run, or one script word set very large — has
+      // to break somewhere, and a visible break beats ink off the edge of the
+      // paper. Everything else wraps at its own boundary as usual.
+      if(a.w > avail){
+        if(a.k === 't' && a.s.length > 1){
+          let part = '';
+          for(const ch of a.s){
+            if(part && textW(part + ch, st.size, a.m) > avail){
+              putAtom({ k: 't', s: part, m: a.m, w: textW(part, st.size, a.m) });
+              part = ch;
+            }else part += ch;
+          }
+          if(part) putAtom({ k: 't', s: part, m: a.m, w: textW(part, st.size, a.m) });
+          return;
+        }
+        if(a.k === 'g' && a.cells.length > 1){
+          let chunk = [], w = 0;
+          for(const c of a.cells){
+            const cw = c.adv / 1000 * a.s;
+            if(chunk.length && w + cw > avail){
+              putAtom({ k: 'g', lang: a.lang, cells: chunk, s: a.s, w, ink: w });
+              chunk = []; w = 0;
+            }
+            chunk.push(c); w += cw;
+          }
+          if(chunk.length) putAtom({ k: 'g', lang: a.lang, cells: chunk, s: a.s, w, ink: w });
+          return;
+        }
+      }
       const cur = atoms.reduce((n, z) => n + z.w, 0);
       if(cur + a.w > avail && atoms.length){ flushLine(false); }
       if(!atoms.length && a.k === 't' && /^\s+$/.test(a.s)) return; // no leading space
@@ -2841,16 +2891,22 @@ function pdfFile(book, scope, scene){
       if(run.k === 's'){
         if(run.flow === 'cols-rtl' || run.flow === 'btt-stave'){
           flushLine(true);
-          const box = scriptBlockSize(run, st.size);
-          need(box.h + 10);
+          const wide = right - left;
+          const box = scriptBlockSize(run, st.size, wide);
+          // row by row, so a passage longer than the page carries on to the next
+          // one instead of being painted through the bottom of the paper
           y -= 8;
-          drawScriptBlock(run, left, y, st.size);
-          y -= box.h + 8;
+          box.rows.forEach((row, ri) => {
+            need(box.rowH[ri]);
+            drawScriptRow(run, row, left, y, box.s, box.pitch);
+            y -= box.rowH[ri] + (ri < box.rows.length - 1 ? box.gap : 0);
+          });
+          y -= 8;
           continue;
         }
         // no synthetic space: placeTSpan already wrote the NBSP pad beside the
         // span, and it arrives as a text run of its own
-        putAtom({ k: 's', run, w: pdfScriptWidth(run, st.size) });
+        scriptAtoms(run, st.size).forEach(putAtom);
         continue;
       }
       const m = Object.assign({}, mark, run);
@@ -3211,8 +3267,30 @@ function auricEnsure(words){
       added = true;
     }catch(e){}
   }
-  if(added) auricRebuild();
+  if(added){
+    // Codepoints run in sorted order, never arrival order. Minting by arrival
+    // makes the mapping a function of which button the author pressed first —
+    // export one scene, then the book, and the same book comes out with
+    // different bytes. Sorted, it is a function of WHICH words exist, and two
+    // exports of the same state are byte for byte the same file.
+    A.order.sort();
+    A.order.forEach((word, i) => { A.words[word].code = AURIC_BASE + i; });
+    auricRebuild();
+  }
   return added;
+}
+// Sorted numbering means a new word renumbers its neighbours, so the whole
+// vocabulary has to be settled BEFORE a file is written — otherwise the first
+// scene is stamped with codepoints the last scene moves. Compiling a doc is
+// what mints its words, so one silent pass over everything that will be written
+// is the priming pass.
+function auricPrime(book, scope, scene){
+  if(!omniWin || !book) return;
+  const docs = [];
+  if(scope === 'scene' && scene) docs.push(scene.doc);
+  else (book.chapters || []).forEach(c => (c.scenes || []).forEach(sc => docs.push(sc.doc)));
+  (book.cards || []).forEach(c => docs.push(c.notes));
+  for(const d of docs){ try{ if(d && d.indexOf('tspan') > -1) syncScriptDoc(d); }catch(e){} }
 }
 function auricRebuild(){
   const A = omniForged && omniForged.celan_basic;
@@ -3231,7 +3309,13 @@ function auricRebuild(){
     auricFace = new FontFace(A.family, A.ttf.buffer.slice(A.ttf.byteOffset, A.ttf.byteOffset + A.ttf.byteLength));
     auricFace.load().then(f => document.fonts.add(f)).catch(() => {});
   }catch(e){}
+  // a renumber makes every rune already on screen point at the wrong word
+  clearTimeout(auricSync);
+  auricSync = setTimeout(() => {
+    try{ decorateAll(edContent); decorateAll(document.body); }catch(e){}
+  }, 0);
 }
+let auricSync = null;
 function auricText(words){
   const A = omniForged && omniForged.celan_basic;
   if(!A) return null;
@@ -3384,7 +3468,13 @@ function omniScriptCSS(){
       rules.push(`.tspan[data-omni][data-lang="celan_basic"]{font-family:'Tenebrae Celan Runes';font-style:normal}`);
   }
   rules.push(`.tspan[data-flow="rtl"]{direction:rtl;unicode-bidi:isolate-override}`);
-  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:var(--tsrun,22em);line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
+  // No column cap, and no break inside a word. A cap of 22 cells split a single
+  // word across two columns at exactly the pitch of a word break — 1,273 of the
+  // 166,464 phrases buildable from the codex's own lexicon reach 22 cells, the
+  // longest at 37 — and a reader cannot tell that from a new word. One column
+  // per word is the contract; the column is as tall as its word, which is how
+  // the codex's own typesetter sets it and what btt-stave has always done.
+  rules.push(`.tspan[data-flow="cols-rtl"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:ltr;unicode-bidi:isolate;white-space:pre-wrap;max-height:none;line-height:1.28;vertical-align:middle;letter-spacing:0;overflow-wrap:normal;word-break:keep-all}`);
   rules.push(`.tspan[data-flow="btt-stave"]{display:inline-block;-webkit-writing-mode:vertical-lr;writing-mode:vertical-lr;text-orientation:upright;direction:rtl;unicode-bidi:isolate-override;white-space:pre-wrap;line-height:1.75;vertical-align:middle;letter-spacing:0;overflow-wrap:anywhere;word-break:break-all}`);
   rules.push(`.tspan[data-size="s"]{font-size:.9em}.tspan[data-size="l"]{font-size:1.6em}.tspan[data-size="xl"]{font-size:2.3em}.tspan[data-block="1"]{display:block;width:100%;margin:.7em 0;vertical-align:baseline}`);
   style.textContent = rules.join('\n');
@@ -3897,13 +3987,19 @@ function retranslateSpan(el, langId, src){
     // where it lives, so it can be put back: replacing the whole contents of a
     // bold run makes the browser delete the run with them
     const hostBlock = blockOf(el), inlineChain = inlineChainOf(el.parentElement, hostBlock);
-    let ok = false;
-    try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el), rg => edApplyHTML(rg, spanOuterHTML(fresh))); }catch(e){}
+    let ok = false, repaired = false;
+    try{ ok = edContent.contains(el) && !!edReplaceInBlock(rangeAround(el), chain => inlineWrap(spanOuterHTML(fresh), chain)); }catch(e){}
+    if(!ok){
+      try{ ok = edContent.contains(el) && edApplyHTML(rangeAround(el), spanOuterHTML(fresh)); }catch(e){}
+      repaired = true;
+    }
     if(!ok){ delete fresh.dataset.tsnew; el.replaceWith(fresh); return fresh; }
     const live = edContent.querySelector('.tspan[data-tsnew]');
     if(live){
-      if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)) hostBlock.appendChild(live);
-      rewrapInline(live, inlineChain);
+      if(repaired){
+        if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)) hostBlock.appendChild(live);
+        rewrapInline(live, inlineChain);
+      }
       delete live.dataset.tsnew;
     }
     try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
@@ -4012,34 +4108,36 @@ function blockOf(el){
   while(n && n !== edContent && !/^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName)) n = n.parentNode;
   return (n && n !== edContent) ? n : edContent;
 }
-// execCommand('insertHTML') decides for itself where an atomic element lands:
-// it hoists the span to the end of the block for a selection that ran to the
-// block's end, out of the block entirely for one that started at its beginning,
-// and inside a list item it sometimes drops the element and keeps only its
-// text. None of that is recoverable from the block alone. So placeTSpan parks
-// an invisible mark at the selection's start first — pushed just outside the
-// range, so the insert has no reason to touch it — and puts the span back
-// exactly there afterwards. A zero-width no-break space is used because the
-// author cannot type one and the browser's editing code leaves it alone;
-// markClear takes every one of them back out before anything is persisted.
-function markPut(el, mark){
-  if(!mark || !mark.parentNode || !edContent.contains(mark)) return false;
-  const i = mark.nodeValue.indexOf(TS_MARK);
-  if(i < 0) return false;
-  const after = mark.splitText(i + 1);
-  after.parentNode.insertBefore(el, after);
-  return true;
+// execCommand('insertHTML') decides for itself where an atomic element lands.
+// It hoists the span out of its block whenever the selection touches a block
+// edge, drops it entirely inside a list item, and dissolves the bold run it
+// replaced. Nothing repaired afterwards is on the browser's undo stack, so redo
+// puts back a span with none of the repair; and every attempt to steer the
+// insert from outside — landmarks parked at the selection's edges — either
+// splits a text node the undo stack holds a reference to, or has to be taken
+// back out afterwards and shifts the offsets it recorded. Both break the undo
+// of the author's EARLIER typing, which is worse than the defect.
+//
+// So don't steer it: leave it no decision to make. Rewrite the whole block in
+// ONE command — the text before, the new fragment inside the inline run it
+// belongs to, the text after — and there is nothing to hoist, nothing to drop
+// and nothing to dissolve. One command is also exactly what the undo stack
+// wants: Ctrl+Z reverses it, Ctrl+Shift+Z replays it, and the history around it
+// is untouched.
+function inlineWrap(html, chain){
+  let h = html;
+  for(const tag of chain){ const t = tag.toLowerCase(); h = `<${t}>${h}</${t}>`; }
+  return h;
 }
-function markClear(){
-  const w = document.createTreeWalker(edContent, NodeFilter.SHOW_TEXT);
-  const hits = [];
-  let n;
-  while((n = w.nextNode())) if(n.nodeValue.indexOf(TS_MARK) > -1) hits.push(n);
-  // blanked, never removed: the browser's undo stack holds references to the
-  // text nodes that surrounded the insert, and taking one out of the tree makes
-  // Ctrl+Z a no-op. An empty text node serializes to nothing and counts as
-  // nothing, so leaving it costs the document exactly zero characters.
-  for(const t of hits) t.nodeValue = t.nodeValue.split(TS_MARK).join('');
+function pruneHusks(root){
+  for(let pass = 0; pass < 6; pass++){
+    const husks = Array.from(root.querySelectorAll('b,strong,i,em,u,s,strike,del,span'))
+      .filter(n => !n.classList.contains('tspan') && !n.textContent.length &&
+                   !n.querySelector('br,.tspan,.asterism'));
+    if(!husks.length) break;
+    husks.forEach(n => n.remove());
+  }
+  return root;
 }
 // The pad placeTSpan writes sits immediately after the span — unless the
 // placement repair wrapped the span back into the bold/italic run it replaced,
@@ -4063,34 +4161,35 @@ function rewrapInline(live, chain){
     wrap.appendChild(live);
   }
 }
-// Replacing a span has the same hazards as inserting one: empty an inline run
-// through execCommand and the browser deletes the run along with its contents,
-// so the author's bold comes back unbolded — and a selection that fills a block
-// gets hoisted. Bracket the range the way placeTSpan does. Not inside a list
-// item, where a landmark on either side makes the insert drop the element.
-function edApplyMarked(range, apply){
-  const sc = range.startContainer;
-  const blk = blockOf(sc.nodeType === 1 ? sc : sc.parentElement);
-  let marked = false;
-  if(blk && blk !== edContent && blk.nodeName !== 'LI' && edContent.contains(blk)){
-    try{
-      const head = document.createTextNode(TS_MARK);
-      const r0 = range.cloneRange();
-      r0.collapse(true);
-      r0.insertNode(head);
-      range.setStartAfter(head);
-      const tail = document.createTextNode(TS_MARK);
-      const r1 = range.cloneRange();
-      r1.collapse(false);
-      r1.insertNode(tail);
-      range.setEndBefore(tail);
-      marked = true;
-    }catch(e){ marked = false; }
-  }
-  let ok = false;
-  try{ ok = apply(range); }catch(e){ ok = false; }
-  if(marked) markClear();
-  return ok;
+// bodyFor(chain) returns the HTML that replaces the range; chain is the
+// bold/italic/underline run the replaced text sat in, innermost first. Returns
+// the block on success and null when the range does not sit inside one block —
+// a cross-block selection has no single block to rewrite, and the caller falls
+// back to replacing the selection directly.
+function edReplaceInBlock(range, bodyFor){
+  try{
+    const sN = range.startContainer, eN = range.endContainer;
+    const sEl = sN.nodeType === 1 ? sN : sN.parentElement;
+    const eEl = eN.nodeType === 1 ? eN : eN.parentElement;
+    if(!sEl || !eEl || !edContent.contains(sEl) || !edContent.contains(eEl)) return null;
+    const blk = blockOf(sEl);
+    if(!blk || blk === edContent || blk !== blockOf(eEl)) return null;
+    const chain = inlineChainOf(sEl, blk);
+    // an empty <b></b> from a range that opened and closed inside one is noise
+    const ser = rg => {
+      const d = document.createElement('div');
+      d.appendChild(rg.cloneContents());
+      return pruneHusks(d).innerHTML;
+    };
+    const pre = document.createRange();
+    pre.setStart(blk, 0); pre.setEnd(sN, range.startOffset);
+    const post = document.createRange();
+    post.setStart(eN, range.endOffset); post.setEnd(blk, blk.childNodes.length);
+    const whole = ser(pre) + bodyFor(chain) + ser(post);
+    const all = document.createRange();
+    all.selectNodeContents(blk);
+    return edApplyHTML(all, whole) ? blk : null;
+  }catch(e){ return null; }
 }
 function padAfter(el){
   // blanked landmarks and the empty <b></b> husks execCommand leaves behind
@@ -4120,7 +4219,7 @@ function padPlan(range){
     const probe = document.createRange();
     probe.setStart(range.endContainer, range.endOffset);
     probe.setEnd(blk, blk.childNodes.length);
-    const ch = probe.toString().split(TS_MARK).join('').charAt(0);
+    const ch = probe.toString().charAt(0);
     if(!ch) return 'need';                                   // end of block: the caret needs it
     if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(ch)) return 'punct';   // no gap at all
     if(/[\s\u00A0]/.test(ch)) return 'space';                // the author's own gap
@@ -4174,97 +4273,60 @@ function placeTSpan(span, langLabel){
       range = sel.rangeCount ? sel.getRangeAt(0) : null;
     }catch(e){}
   }
-  // Where the span BELONGS. execCommand('insertHTML') moves it out of its block
-  // whenever the selection touched a block edge — to the end of the block for a
-  // trailing selection, clean out of it for a leading one — and drops any inline
-  // marks the replaced text carried. Remembering the block is not enough:
-  // appending to it is right only for the trailing case, and for the phrase a
-  // paragraph OPENS with it teleports the author's words to the end of it.
-  // Park an invisible mark at the selection's start instead — pushed just past
-  // the range, so the insert has no reason to touch it — and it names the exact
-  // spot to come back to, inline run included, whatever the browser did.
-  let hostBlock = null, inlineChain = [], marked = false, head = null;
+  // The block it belongs to and the bold/italic run it is replacing text in,
+  // both read BEFORE anything moves.
+  let hostBlock = null, inlineChain = [];
   if(range){
     const start = range.startContainer;
     const startEl = start.nodeType === 1 ? start : start.parentElement;
     if(startEl && edContent.contains(startEl)){
       hostBlock = blockOf(startEl);
       inlineChain = inlineChainOf(startEl, hostBlock);
-      // …except inside a list item, where a mark on either side makes the insert
-      // drop the element and keep only its text. Unmarked, a list item places
-      // the span correctly on its own, so there is nothing to protect there.
-      try{
-        if(hostBlock.nodeName === 'LI') throw 0;
-        head = document.createTextNode(TS_MARK);
-        const r0 = range.cloneRange();
-        r0.collapse(true);
-        r0.insertNode(head);
-        range.setStartAfter(head);   // landmarks, never part of the selection
-        const tail = document.createTextNode(TS_MARK);
-        const r1 = range.cloneRange();
-        r1.collapse(false);
-        r1.insertNode(tail);
-        range.setEndBefore(tail);
-        marked = true;
-      }catch(e){ marked = false; head = null; }
     }
   }
   const plan = range ? padPlan(range) : 'need';
   if(plan === 'need') span.dataset.pad = '1'; else delete span.dataset.pad;
+  const padStr = plan === 'need' ? ' ' : '';
   let placed = false;
-  try{ if(range) placed = edApplyHTML(range, spanOuterHTML(span) + (plan === 'need' ? ' ' : '')); }catch(e){}
-  if(placed && !edContent.querySelector('.tspan[data-tsnew]')){
-    // insertHTML reported success but dropped the element while KEEPING its
-    // text (seen inside list items): put the element in by hand at the mark,
-    // and let the sweep below take the loose run out.
-    try{
-      if(!markPut(span, head)){
-        const sel = window.getSelection();
-        const r2 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-        if(r2 && edContent.contains(r2.commonAncestorContainer)){
-          r2.insertNode(span);
-          r2.collapse(false);
-        }else placed = false;
-      }
-    }catch(e){ placed = false; }
+  // the whole block in one command — see edReplaceInBlock
+  if(range) placed = !!edReplaceInBlock(range, chain => inlineWrap(spanOuterHTML(span), chain) + padStr);
+  // a selection spanning two blocks has no single block to rewrite: replace it
+  // where it stands and put the span back afterwards if the insert moves it
+  let repaired = false;
+  if(!placed && range){
+    try{ placed = edApplyHTML(range, spanOuterHTML(span) + padStr); }catch(e){}
+    repaired = true;
   }
-  if(!placed && !edContent.querySelector('.tspan[data-tsnew]')){ // last-ditch path
+  if(!edContent.querySelector('.tspan[data-tsnew]')){
+    // insertHTML can report success and drop the element while keeping its text
+    try{
+      const sel = window.getSelection();
+      const r2 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      if(r2 && edContent.contains(r2.commonAncestorContainer)){
+        r2.insertNode(span);
+        r2.collapse(false);
+      }
+    }catch(e){}
+  }
+  if(!edContent.querySelector('.tspan[data-tsnew]')){ // last-ditch path
     const p = document.createElement('p');
     p.appendChild(span);
     edContent.appendChild(p);
   }
   const live = edContent.querySelector('.tspan[data-tsnew]');
   if(live){
-    const shed = live.parentElement;
-    // Bracketed, the insert lands in place and undo/redo replay it exactly, so
-    // the repair below is a fallback for the cases where the browser still
-    // moves the span out of its block. It is a raw DOM edit and therefore
-    // invisible to undo — only worth making when the placement is already wrong.
-    if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)){
-      // a text node that is nothing BUT the pad travels back with the span; one
-      // carrying the author's words stays where it is
-      let pad0 = live.nextSibling;
-      if(!(pad0 && pad0.nodeType === 3 && /^\u00A0[\s\u00A0]*$/.test(pad0.nodeValue))) pad0 = null;
-      if(markPut(live, head)){
-        if(pad0) live.after(pad0);
-      }else{
-        hostBlock.appendChild(live);
-        if(pad0) hostBlock.appendChild(pad0);
-      }
-      // an empty wrapper the insert built around the span is not the author's
-      for(let n = shed; n && n !== live.parentElement && n !== edContent && n.nodeType === 1 &&
-                        !n.firstChild && !/^(P|H2|H3|BLOCKQUOTE|LI|DIV)$/.test(n.nodeName);){
-        const up = n.parentElement; n.remove(); n = up;
-      }
+    if(repaired){
+      if(hostBlock && hostBlock !== edContent && edContent.contains(hostBlock) && !hostBlock.contains(live)) hostBlock.appendChild(live);
+      rewrapInline(live, inlineChain);
     }
+    // Script characters live inside a span and nowhere else. A run left loose in
+    // the prose carries no source, no tongue and no font, survives revert, and
+    // every legible exporter prints it verbatim.
     stripLooseScript(hostBlock && edContent.contains(hostBlock) ? hostBlock : edContent);
-  }
-  if(marked) markClear();
-  // Reconcile what the browser actually did with the gap. insertHTML can turn
-  // the author's own space into an NBSP, or add one where the plan said none.
-  // Whoever ends up owning the gap is recorded on the span, because revert must
-  // absorb OUR pad and must never eat the author's space.
-  if(live){
+    // Reconcile what the browser did with the gap. It can turn the author's own
+    // space into an NBSP, or add one where the plan said none. Whoever ends up
+    // owning the gap is recorded on the span, because revert must absorb OUR pad
+    // and must never eat the author's space.
     const pad = padAfter(live);
     const has = !!(pad && pad.nodeValue.charCodeAt(0) === 0x00A0);
     if(!has) delete live.dataset.pad;
@@ -4274,15 +4336,9 @@ function placeTSpan(span, langLabel){
       if(rest) pad.nodeValue = rest; else pad.remove();
       delete live.dataset.pad;
     }else{                                     // 'space' — that NBSP is theirs
-      pad.nodeValue = pad.nodeValue.replace(/^[\s\u00A0]+/, ' ');
+      pad.nodeValue = pad.nodeValue.replace(/^[\s ]+/, ' ');
       delete live.dataset.pad;
     }
-  }
-  if(live){
-    // and back inside the bold/italic/underline run it replaced text in. With
-    // the mark this is a fallback — the mark already sits inside that run — so
-    // it fires only when the insert destroyed the wrapper itself.
-    rewrapInline(live, inlineChain);
   }
   if(live) delete live.dataset.tsnew;
   delete span.dataset.tsnew;
@@ -4351,7 +4407,13 @@ function tspanSheet(el){
     { label: 'Revert to plain text', icon: ICONS.restore, onTap: () => {
         const blk = blockOf(el);
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el, true), rg => edApplyText(rg, src)); }catch(e){}
+        try{
+          const rg = rangeAround(el, true);
+          // back inside the bold/italic run the span was sitting in: the words
+          // the author wrote were bold before they were translated
+          ok = edContent.contains(el) &&
+               (!!edReplaceInBlock(rg, chain => inlineWrap(esc(src), chain)) || edApplyText(rangeAround(el, true), src));
+        }catch(e){}
         if(!ok) el.replaceWith(document.createTextNode(src));
         normalizeSpacing(blk);
         persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
@@ -4359,7 +4421,10 @@ function tspanSheet(el){
     { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
         const blk = blockOf(el);
         let ok = false;
-        try{ ok = edContent.contains(el) && edApplyMarked(rangeAround(el, true), rg => edApplyText(rg, '')); }catch(e){}
+        try{
+          const rg = rangeAround(el, true);
+          ok = edContent.contains(el) && (!!edReplaceInBlock(rg, () => '') || edApplyText(rangeAround(el, true), ''));
+        }catch(e){}
         if(!ok) el.remove();
         normalizeSpacing(blk);
         persistEditor(); updateCount(); syncEmpty(); flushSave();

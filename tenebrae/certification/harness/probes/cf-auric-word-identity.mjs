@@ -79,15 +79,21 @@ ck('the minted key is the codex\'s own cleaned word, every variant',
 
 for(const r of R.diffRuns) console.log(`   ${JSON.stringify(r.v).padEnd(10)} key=${JSON.stringify(r.key).padEnd(8)} codes=${r.cs.map(n=>'U+'+n.toString(16)).join(',')||'-'} minted=${r.minted}`);
 const byKey = Object.fromEntries(R.diffRuns.map(r => [r.v, r]));
+// Codepoints are assigned in SORTED order, so minting a word renumbers the ones
+// that sort after it: a code read at the moment a run was written is stale as
+// soon as anything else is minted. The invariant — distinct words, distinct
+// runes — is about the mapping as it finally stands, so read it from R.geo,
+// which is collected after every call above.
+const code = k => R.geo[k] && R.geo[k].code;
 ck('a kept hyphen still separates words: "coop" != "co-op"',
-   byKey['coop'].cs[0] !== byKey['co-op'].cs[0] && byKey['co-op'].key === 'co-op',
-   `${byKey['coop'].key} U+${byKey['coop'].cs[0].toString(16)} vs ${byKey['co-op'].key} U+${byKey['co-op'].cs[0].toString(16)}`);
+   code('coop') !== code('co-op') && byKey['co-op'].key === 'co-op',
+   `coop U+${(code('coop')||0).toString(16)} vs co-op U+${(code('co-op')||0).toString(16)}`);
 ck('the curly apostrophe is STRIPPED and the straight one KEPT — exactly as the codex cleans',
    byKey["don't"].key === "don't" && byKey['don’t'].key === 'dont' &&
-   byKey["don't"].cs[0] !== byKey['don’t'].cs[0],
+   code("don't") !== code('dont'),
    `"don't"->${JSON.stringify(byKey["don't"].key)}  "don’t"->${JSON.stringify(byKey['don’t'].key)}`);
-ck('a different word is a different rune: "sea" != "seas"',
-   byKey['seas'].cs[0] !== R.runs[0].cs[0]);
+ck('a different word is a different rune: "sea" != "seas"', code('seas') !== code('sea'),
+   `sea U+${(code('sea')||0).toString(16)} vs seas U+${(code('seas')||0).toString(16)}`);
 
 for(const r of R.emptyRuns) console.log(`   ${JSON.stringify(r.v).padEnd(8)} -> ${JSON.stringify(r.scr)} minted=${r.minted}`);
 ck('a token that cleans to nothing mints nothing and writes nothing',
