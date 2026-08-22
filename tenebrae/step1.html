@@ -4200,9 +4200,18 @@ function normalizeSpacing(block){
   const hits = [];
   let n;
   while((n = w.nextNode())) if(n.nodeValue.indexOf('\u00A0') > -1) hits.push(n);
+  // Which NBSPs are pads is settled by asking the spans, not by looking at the
+  // previous sibling: a repair can leave the pad on the far side of an empty
+  // <b></b> husk, or just outside the run the span was rewrapped into, and
+  // folding a live pad into a plain space means revert can no longer take it
+  // back and the author gains a space every cycle.
+  const pads = new Set();
+  (block.querySelectorAll ? block.querySelectorAll('.tspan[data-pad="1"]') : []).forEach(sp => {
+    const p = padAfter(sp);
+    if(p) pads.add(p);
+  });
   for(const t of hits){
-    const padOfSpan = t.previousSibling && t.previousSibling.nodeType === 1 &&
-                      t.previousSibling.classList && t.previousSibling.classList.contains('tspan');
+    const padOfSpan = pads.has(t);
     t.nodeValue = padOfSpan
       ? t.nodeValue.replace(/\u00A0(?!$)/g, ' ').replace(/^\u00A0\u00A0+/, '\u00A0') // keep one pad
       : t.nodeValue.replace(/\u00A0/g, ' ');
@@ -4514,6 +4523,7 @@ function placeTSpan(span, langLabel){
   delete span.dataset.tsnew;
   edSelRange = null;
   try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
+  normalizeSpacing(edContent);   // the insert leaves NBSPs of its own about
   syncEmpty(); updateCount(); persistEditor();
   // a translation is a deliberate act, not a keystroke: it must not sit in the
   // 500 ms typing debounce where a reload can still lose it
@@ -4533,7 +4543,10 @@ function tspanRevertItem(el, src){
     // back inside the bold/italic run the span was sitting in: the words the
     // author wrote were bold before they were translated
     if(edContent.contains(el)) edReplaceSpan(el, src, chain => inlineWrap(esc(src), chain));
-    normalizeSpacing(blk);
+    // the whole editor, not just this block: a cross-block insert leaves the
+    // author's space as an NBSP at the head of the FOLLOWING block, which
+    // blockOf(el) never reaches
+    normalizeSpacing(edContent);
     persistEditor(); updateCount(); flushSave(); toast('Back to the source line');
   } };
 }
@@ -4541,7 +4554,10 @@ function tspanRemoveItem(el){
   return { label: 'Remove span', icon: ICONS.trash, destructive: true, onTap: () => {
     const blk = blockOf(el);
     if(edContent.contains(el)) edReplaceSpan(el, '', () => '');
-    normalizeSpacing(blk);
+    // the whole editor, not just this block: a cross-block insert leaves the
+    // author's space as an NBSP at the head of the FOLLOWING block, which
+    // blockOf(el) never reaches
+    normalizeSpacing(edContent);
     persistEditor(); updateCount(); syncEmpty(); flushSave();
   } };
 }
