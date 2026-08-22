@@ -1046,11 +1046,17 @@ function sanitizeHTML(html){
         child.replaceWith(d); continue;
       }
       if(tag === 'SPAN'){
-        if(child.classList.contains('tspan') && child.dataset.src && child.dataset.lang){
+        if(child.classList.contains('tspan')){
+          // data-src is the irreplaceable thing here; data-lang is recoverable
+          // and data-scr is derived. A span that still holds the author's
+          // English but lost its tongue used to fall through and be replaced by
+          // its ROMANIZATION — the English one attribute away, discarded, and
+          // the Tenebrae put in the prose where claudeSceneText then sent it.
+          // Keep whatever survived, and mark what is missing.
           const t = document.createElement('span');
           t.className = 'tspan';
-          t.dataset.lang = String(child.dataset.lang).replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
-          t.dataset.src = String(child.dataset.src).slice(0, 200000); // never lose the author's English
+          t.dataset.lang = String(child.dataset.lang || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+          t.dataset.src = String(child.dataset.src || '').slice(0, 200000); // never lose the author's English
           // same ceiling as data-src: a lower cap on rom/scr silently desyncs
           // data-scr from the rendered text on a long passage
           t.dataset.rom = String(child.dataset.rom || '').slice(0, 200000);
@@ -1059,24 +1065,20 @@ function sanitizeHTML(html){
           if(/^(s|l|xl)$/.test(child.dataset.size || '')) t.dataset.size = child.dataset.size;
           if(child.dataset.block === '1') t.dataset.block = '1';
           if(child.dataset.pad === '1') t.dataset.pad = '1';
-          if(child.dataset.unknown === '1') t.dataset.unknown = '1';
           if(child.dataset.omni) t.dataset.omni = '1';
           if(child.getAttribute('dir') === 'rtl') t.setAttribute('dir', 'rtl');
           t.setAttribute('contenteditable', 'false');
-          t.textContent = child.dataset.omni
-            ? (child.dataset.scr || child.dataset.rom || '')
-            : (child.textContent || child.dataset.rom || '');
+          if(!t.dataset.src || !t.dataset.lang) t.dataset.unknown = '1';
+          if(child.dataset.unknown === '1') t.dataset.unknown = '1';
+          t.textContent = !t.dataset.src
+            // nothing to tap back to: show the romanization, which is at least
+            // readable and at least exportable, and never the raw run
+            ? String(child.dataset.rom || '')
+            : (child.dataset.omni
+                ? (child.dataset.scr || child.dataset.rom || '')
+                : (child.textContent || child.dataset.rom || ''));
+          if(!t.textContent && !t.dataset.src){ child.remove(); continue; }
           child.replaceWith(t); continue;
-        }
-        if(child.classList.contains('tspan')){
-          // A .tspan that failed the test above has no source to tap back to,
-          // so it is not a span any more — but unwrapping it would promote its
-          // PUA run to bare prose, where it has no font, no meaning, and rides
-          // out into every export as raw codepoints. Keep the romanization if
-          // there is one; otherwise there is nothing here worth keeping.
-          const rom = String(child.dataset.rom || '').trim();
-          if(rom) child.replaceWith(document.createTextNode(rom)); else child.remove();
-          continue;
         }
         const sc = child.classList.contains('sc') || /small-caps/.test(child.getAttribute('style') || '');
         if(sc){
@@ -1117,6 +1119,24 @@ function sanitizeHTML(html){
     el.remove();
   }
   walk(frag);
+  // Script characters live inside a .tspan and nowhere else. The branch above
+  // only ever looked at SPAN, so `<b class="tspan" data-scr=...>` came through
+  // with its class stripped and all its raw codepoints intact — into storage,
+  // into .md/.txt/.docx, and into a Claude request body as ordinary prose.
+  {
+    const w = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    let n;
+    while((n = w.nextNode())){
+      if(!/[\uE000-\uF8FF]/.test(n.nodeValue)) continue;
+      if(n.parentElement && n.parentElement.closest('.tspan')) continue;
+      hits.push(n);
+    }
+    for(const t of hits){
+      t.nodeValue = t.nodeValue.replace(/[\uE000-\uF8FF]+/g, '');
+      if(!t.nodeValue) t.remove();
+    }
+  }
   // execCommand leaves the husk of a run it re-wrapped — <b><i><u></u></i></b>
   // with nothing inside — and the browser's own undo does not always take it
   // back. An empty mark carries no text and no meaning; it must not reach
@@ -1534,15 +1554,37 @@ edTitle.addEventListener('paste', e => {
   const t = (e.clipboardData.getData('text/plain') || '').replace(/\s+/g, ' ').trim();
   document.execCommand('insertText', false, t);
 });
+// script characters loose in a paste: they carry no tongue, no source and no
+// font, so they cannot be tapped back to English, cannot be re-rendered when
+// the codex changes, and ride into every export as raw codepoints
+function loosePua(html){
+  const d = document.createElement('div');
+  d.innerHTML = String(html || '');
+  const w = document.createTreeWalker(d, NodeFilter.SHOW_TEXT);
+  let n = 0, t;
+  while((t = w.nextNode())){
+    if(t.parentElement && t.parentElement.closest('.tspan')) continue;
+    n += (t.nodeValue.match(/[\uE000-\uF8FF]/g) || []).length;
+  }
+  return n;
+}
 edContent.addEventListener('paste', e => {
   e.preventDefault();
   const html = e.clipboardData.getData('text/html');
+  let dropped = false;
   if(html){
+    dropped = loosePua(html) > 0;
     document.execCommand('insertHTML', false, sanitizeHTML(html));
   }else{
     const t = e.clipboardData.getData('text/plain') || '';
-    document.execCommand('insertText', false, t);
+    const clean = noTenebrae(t);
+    dropped = clean !== t;
+    document.execCommand('insertText', false, clean);
   }
+  // The app's own Ctrl+C puts the rendered script on the clipboard, so this is
+  // an easy thing for the author to do by accident. Dropping it is right —
+  // saying nothing about it is not.
+  if(dropped) toast('That\u2019s Tenebrae script \u2014 paste the English and translate it');
   onEdInput();
 });
 

@@ -85,10 +85,19 @@ console.log('   src-less span, sanitized   -> tspan kept?', /tspan/.test(emptySr
 console.log('   sanitized, then sceneText  -> PUA:', puaOf(emptySrc.afterSanitize).length, puaOf(emptySrc.afterSanitize).slice(0, 8).join(' '));
 ck('a src-less span, while still a span, contributes nothing to the payload',
    !PUA_RE.test(emptySrc.asSpan) && !emptySrc.asSpan.includes(span.rom), JSON.stringify(emptySrc.asSpan));
-ck("the app's own sanitizer keeps the script when it drops the src-less span (teeth)",
-   PUA_RE.test(emptySrc.sanitized) && !/tspan/.test(emptySrc.sanitized), 'PUA ' + puaOf(emptySrc.sanitized).length + ' / tspan ' + /tspan/.test(emptySrc.sanitized));
-ck('script the sanitizer left as prose is NOT put in the payload', !PUA_RE.test(emptySrc.afterSanitize),
-   'leaked ' + puaOf(emptySrc.afterSanitize).length + ': ' + puaOf(emptySrc.afterSanitize).slice(0, 8).join(' '));
+// A span with no data-src has nothing to tap back to, but unwrapping it made
+// things worse, not better: its run became bare prose, and the recovery that
+// replaced the run with the ROMANIZATION put the Tenebrae on the wire in the
+// author's own sentences — "never as script or romanization" is one clause.
+// The span stays a span, marked; claudeSceneText reads data-src, so it sends
+// nothing at all.
+ck('the sanitizer keeps a src-less run inside a span rather than promoting it to prose',
+   /tspan/.test(emptySrc.sanitized), 'tspan ' + /tspan/.test(emptySrc.sanitized) + ' / PUA ' + puaOf(emptySrc.sanitized).length);
+ck('and marks it, so it cannot pass for the author\'s prose',
+   /data-unknown="1"/.test(emptySrc.sanitized), emptySrc.sanitized.slice(0, 200));
+ck('nothing of that span reaches the payload — not its script, not its romanization',
+   !PUA_RE.test(emptySrc.afterSanitize) && !emptySrc.afterSanitize.includes(span.rom),
+   'leaked ' + puaOf(emptySrc.afterSanitize).length + ': ' + JSON.stringify(emptySrc.afterSanitize).slice(0, 200));
 
 /* ---------- 3. end to end: paste such a span, run the pass, read the body ---------- */
 await page.evaluate(({ lang, rom, scr }) => {
@@ -138,7 +147,11 @@ await T(1600);
 const b1b = await page.evaluate(() => ({ body: window.__bodies[window.__bodies.length - 1], doc: window.tenebrae._omni.probe.sceneDoc() }));
 console.log('   plain-paste doc: tspan?', /tspan/.test(b1b.doc), 'PUA:', puaOf(b1b.doc).length);
 console.log('   body#2b PUA codepoints:', puaOf(b1b.body).slice(0, 12).join(' '), '(' + puaOf(b1b.body).length + ')');
-ck('the plain-text paste really landed (teeth)', PUA_RE.test(b1b.doc), 'doc PUA ' + puaOf(b1b.doc).length);
+// Script pasted as plain characters is not writing — no tongue, no source, no
+// font — so the editor refuses it outright and says why, rather than taking it
+// in and stripping it somewhere the author cannot see.
+ck('an ordinary plain-text paste of script is refused, not silently absorbed',
+   !PUA_RE.test(b1b.doc), 'doc PUA ' + puaOf(b1b.doc).length);
 ck('NO PUA codepoint in the request body after an ordinary plain-text paste of script',
    !PUA_RE.test(b1b.body), 'leaked ' + puaOf(b1b.body).length + ': ' + puaOf(b1b.body).slice(0, 12).join(' '));
 await closeSheet();
