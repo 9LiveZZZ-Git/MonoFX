@@ -11,3 +11,12 @@ native/build/
 
 # Quality-suite renders: graphs and ~21 MB of audio, regenerate with `npm run quality`
 quality-out/
+
+# Tenebrae certification scratch. Probes, diagnostic one-offs and A/B copies of
+# the artifact get written next to the thing they are testing — that is the
+# point, they need serve.mjs's ROOT and ex-lib's relative import. An underscore
+# prefix marks them as this-session-only: a `_fx-*` variant of a probe, a
+# `_refute_*` isolation, an `_old<sha>.html` build to A/B against. None of it is
+# evidence — the committed probes are — and `_old*.html` alone is 5 MB a copy.
+tenebrae/_*.html
+tenebrae/certification/harness/probes/_*
