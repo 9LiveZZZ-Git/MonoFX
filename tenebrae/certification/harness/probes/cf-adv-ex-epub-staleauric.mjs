@@ -124,27 +124,81 @@ console.log('epub spans:', JSON.stringify(spans.map(s => ({ lang: s.lang, src: s
   codes: [...s.body].filter(c => PUA_RE.test(c)).map(c => c.codePointAt(0).toString(16)) }))));
 ck('epub: both Auric spans present', spans.length === 2 && spans.every(s => s.lang === 'celan_basic'), spans.length);
 
-// live forge = ground truth for what each codepoint MEANS right now
-const forge = await page.evaluate(() => {
-  const A = window.tenebrae._forge.map().celan_basic;
-  const inv = {}; A.order.forEach(w => inv[A.words[w].code] = w);
-  return { inv, order: A.order.slice() };
-});
-console.log('post-export mint order:', forge.order.join(' '));
+// What each exported codepoint MEANS is a question about the FILE, so it has to
+// be asked of the file's own face. An export builds its own document-ordered
+// mapping — that is what makes two exports of the same state byte identical —
+// so decoding its codes through the SESSION's map answers a different question
+// and reads pure noise. Compare outlines instead: the rune the embedded face
+// draws for each exported codepoint, against the rune the live face draws for
+// the word that codepoint is supposed to be. If syncScriptDoc had not
+// regenerated, these would be different drawings.
+const cssA = new TextDecoder().decode(ez.get('OEBPS/style.css'));
+const unqA = t => t.replace(/\\(.)/g, '$1');
+let famA = null, mA;
+const rxA = /\.tspan\[data-lang="celan_basic"\]\{font-family:'((?:[^'\\]|\\.)+)'/g;
+while((mA = rxA.exec(cssA))) famA = unqA(mA[1]);
+let hrefA = null, fA;
+const frxA = /@font-face\{font-family:'((?:[^'\\]|\\.)+)';src:url\('(fonts\/f\d+\.ttf)'\)/g;
+while((fA = frxA.exec(cssA))) if(unqA(fA[1]) === famA) hrefA = fA[2];
+ck('epub: the Auric face is embedded and named by the per-language rule', !!hrefA, famA + ' -> ' + hrefA);
 
-const clean = w => String(w).replace(/[^\wéäí'-]/g, '').toLowerCase();
-for(const s of spans){
-  const codes = [...s.body].filter(c => PUA_RE.test(c)).map(c => c.codePointAt(0));
-  const got = codes.map(c => forge.inv[c] || ('U+' + c.toString(16)));
-  const want = String(s.rom || '').split(/\s+/).map(clean).filter(Boolean);
-  ck(`epub: "${s.src}" writes the RIGHT Auric words (codes decoded through the live face)`,
-     JSON.stringify(got) === JSON.stringify(want), `got=[${got.join(' ')}] want=[${want.join(' ')}]`);
+const cleanW = w => String(w).replace(/[^\wéäí'-]/g, '').toLowerCase();
+if(hrefA){
+  await writeFile(OUT + '/epubface.ttf', ez.get('OEBPS/' + hrefA));
+  // mint the expected words live, then take the live face and its map
+  const live = await page.evaluate(async words => {
+    for(const w of words){
+      const r = await window.tenebrae.translate2('celan_basic', w);
+      if(r) window.tenebrae._forge.textForToks('celan_basic', r.toks || []);
+    }
+    const A = window.tenebrae._forge.map().celan_basic;
+    let bin = '';
+    for(const x of A.ttf) bin += String.fromCharCode(x);
+    return { ttf: btoa(bin), codes: Object.fromEntries(A.order.map(w => [w, A.words[w].code])) };
+  }, spans.map(s2 => s2.src));
+  await writeFile(OUT + '/liveface.ttf', Buffer.from(live.ttf, 'base64'));
+
+  const pairs = [], shapeBad = [];
+  for(const sp of spans){
+    const codes = [...sp.body].filter(c => PUA_RE.test(c)).map(c => c.codePointAt(0));
+    const want = String(sp.rom || '').split(/\s+/).map(cleanW).filter(Boolean);
+    if(codes.length !== want.length){ shapeBad.push(`"${sp.src}": ${codes.length} runes for ${want.length} words`); continue; }
+    want.forEach((w, i) => {
+      if(live.codes[w] == null){ shapeBad.push(`"${w}" never minted live`); return; }
+      pairs.push([codes[i], live.codes[w], w, sp.src]);
+    });
+  }
+  ck('epub: one rune per romanized word, for every Auric span', shapeBad.length === 0, shapeBad.join('; '));
+
+  let bad = ['not run'];
+  if(!shapeBad.length){
+    const py = `
+import json
+from fontTools.ttLib import TTFont
+from fontTools.pens.recordingPen import RecordingPen
+def draw(path, code):
+    f = TTFont(path); cm = f.getBestCmap()
+    if code not in cm: return None
+    gs = f.getGlyphSet(); pen = RecordingPen(); gs[cm[code]].draw(pen)
+    return (repr(pen.value), round(gs[cm[code]].width, 4))
+out = []
+for ec, lc, word, src in ${JSON.stringify(pairs)}:
+    a = draw("${OUT}/epubface.ttf", ec)
+    b = draw("${OUT}/liveface.ttf", lc)
+    if a is None: out.append(word + ": U+%04X missing from the EPUB face" % ec)
+    elif b is None: out.append(word + ": U+%04X missing from the live face" % lc)
+    elif a != b: out.append(word + " (in \"" + src + "\"): the EPUB draws a different rune")
+print(json.dumps(out))
+`;
+    await writeFile(OUT + '/outline.py', py);
+    bad = JSON.parse(execFileSync('python3', [OUT + '/outline.py'], { encoding: 'utf8' }).trim());
+  }
+  ck('epub: every exported rune is the one the codex draws for that word — so the stale data-scr really was regenerated',
+     bad.length === 0, JSON.stringify(bad).slice(0, 400) + `  (${pairs.length} runes decoded through the embedded face)`);
 }
+
 const epubCodes = spans.map(s => [...s.body].filter(c => PUA_RE.test(c)).map(c => c.codePointAt(0).toString(16)));
 console.log('DIAGNOSTIC stale-vs-fresh codes: stored', JSON.stringify(storedScr.map(x=>x.codes)), 'exported', JSON.stringify(epubCodes));
-ck('the exported codes are NOT the stale stored ones (proves regeneration ran)',
-   JSON.stringify(storedScr.map(x=>x.codes).sort()) !== JSON.stringify(epubCodes.slice().sort()),
-   'stored=' + JSON.stringify(storedScr.map(x=>x.codes)) + ' exported=' + JSON.stringify(epubCodes));
 
 // the embedded Auric face must cover the codes the export actually wrote
 const css = new TextDecoder().decode(ez.get('OEBPS/style.css'));

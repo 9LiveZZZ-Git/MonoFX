@@ -95,9 +95,15 @@ ck('after a reload with the state untouched, the PDF is byte-identical',
      for(let i = 0; i < n; i++) if(p1[i] !== p2[i]) return i;
      return 'none';
    })()}`);
-ck('the Auric mint order is the same across the reload',
-   JSON.stringify(mintOrder3.order) === JSON.stringify(mintOrder1.order),
-   `s1=[${mintOrder1.order.join(' ')}] s2=[${mintOrder3.order.join(' ')}]`);
+// The session's own mint order is a record of what THIS session has written, so
+// after a reload with no authoring it is empty — and it is no longer what the
+// file is built from: an export swaps in a document-ordered mapping for the
+// length of the write, which is exactly why the two PDFs above are byte
+// identical. What must hold here is that it put the session's map back.
+const order2 = mintOrder2 ? mintOrder2.order : [];
+ck('the export leaves the session’s own mint order exactly as it found it',
+   JSON.stringify(mintOrder3.order) === JSON.stringify(order2),
+   `before=[${order2.join(' ')}] after=[${mintOrder3.order.join(' ')}]  (session 1 wrote: [${mintOrder1.order.join(' ')}])`);
 
 // how far does the drift reach: the embedded font bytes, or only the ids?
 const fontOf = buf => {

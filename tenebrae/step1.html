@@ -4589,7 +4589,6 @@ function placeTSpan(span, langLabel){
   delete span.dataset.tsnew;
   edSelRange = null;
   try{ const sel = window.getSelection(); sel && sel.removeAllRanges(); }catch(e){}
-  normalizeSpacing(edContent);   // the insert leaves NBSPs of its own about
   syncEmpty(); updateCount(); persistEditor();
   // a translation is a deliberate act, not a keystroke: it must not sit in the
   // 500 ms typing debounce where a reload can still lose it
