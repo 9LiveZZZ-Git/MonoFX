@@ -9,6 +9,15 @@
 
 ---
 
+> **Status note, added 2026-08-22.** Every defect below (D1–D18) has since been closed
+> over two remediation passes; see `remediation-report.md`, which also records four
+> pass-1 fixes that were themselves wrong, two further defects this report did not find
+> (EPUB's asterism channel, separator-shaped prose), and one over-claim in this document:
+> the TX-3 row reads *pass*, but `cf-ref-tx3-cold-history` was red on its codepoint axis
+> against these very bytes. The verdict below stands as written — it is the record of an
+> independent audit of `4a7a120d…`, not of the current artifact, and only another
+> independent run can change it.
+
 ## Verdict
 
 # NOT CERTIFIED

@@ -1,7 +1,8 @@
 # Tenebrae Writer — Remediation Pass over the Full Certification Report
 
 **Artifact:** `tenebrae/step1.html`
-**Bytes at the end of this pass:** sha256 `74c3535f376413282ee4cd1c9220ed28e3f6bceaa2f441ad48f36fcb9851a74a`, 4,978,109 B, 6,826 lines, at commit `b4d03f0`
+**Bytes at the end of pass 1:** sha256 `74c3535f…`, 4,978,109 B, 6,826 lines, at commit `b4d03f0`
+**Bytes at the end of pass 2:** sha256 `d8089a49a87be1fbe1672786aecc30e2dc2fc87d483a887c92139b6ad4370dec`, 4,987,316 B, 6,995 lines, at commit `eec1ae4`
 **Answers:** `certification/full-certification-report.md` (NOT CERTIFIED, 18 open defects, certified against `4a7a120d…` at `0e5b9a4`)
 **Standard:** `certification/translation-requirements.md` (TX), `certification/step1-requirements.md` (step-1)
 **Date:** 2026-08-22
@@ -11,8 +12,16 @@
 ## What this document is, and what it is not
 
 The full certification report closed with eighteen numbered defects (D1–D18) and a
-recommended fix order. **Every one of them is now closed**, in five commits, with the
-probe that found it green against the final bytes.
+recommended fix order. **Every one of them is now closed**, with the probe that found it
+green against the final bytes.
+
+This took **two passes**, and the second one is the more instructive record. Pass 1
+closed D1–D18. Pass 2 put the pass-1 work in front of adversarial readers — five agents
+diagnosing the probes that were still red, each with an independent refuter told to
+break the diagnosis — and found that **four of the pass-1 fixes were wrong**, two of
+them worse than the defect they closed. §"What pass 2 found" has the detail. The whole
+217-probe suite is green against the final bytes: 195 PASS, 22 diagnostics, 0 FAIL,
+0 crashes.
 
 This is **not a second certification.** A certification is an adversarial audit run by
 readers who did not write the code; this pass was made by the same hand that wrote the
@@ -91,15 +100,114 @@ pass began.
 | **D13** | TX-11b | An in-scene ⁂ carries its own marker; a chapter boundary with no title carries one too; a marked scene heading is a scene whatever its level; a lone top-level heading before any prose is the book title even with chapter breaks present; an empty chapter comes back empty; the import preview names the rule it is using. | `cf-ex-md-marker-roundtrip`, `cf-ex-md-splitrule`, `cf-adv-ex-md-optionsmatrix`, `cf-ex-degenerate-formats` PASS |
 | **D14** | TX-9 | A tongue this codex does not have is refused, never relabelled. The span keeps the author's words and its recorded tongue, marks itself so it cannot pass for prose, and its sheet says what happened and offers the two ways out. | `cc-legacy-tongue-crossformat`, `cf-tx2-parity-extended` PASS |
 | **D15** | TX-4 | `head`'s bounding box is clamped to zeros when no glyph has an outline; `post.isFixedPitch` is read off the advances. An EPUB embeds only the faces the book's own spans call for. | `cf-forge-ttf-spec` PASS |
-| **D16** | TX-10b, TX-4 | Auric codepoints are assigned in sorted order, and the whole vocabulary is minted before a file is written. `persistEditor` no longer stamps the book as edited when a scene is merely opened. | `cf-adv-pdf-det-order`, `cf-pdf-determinism-reload` PASS |
-| **D17** | ED-6 | `sanitizeHTML` no longer unwraps a source-less `.tspan` into bare prose; it keeps the romanization if there is one and drops the run if there is not. | covered by `cf-assist-nosend`, `cf-adv-ex-pua-leak` |
+| **D16** | TX-10b, TX-4 | ~~Sorted mint order.~~ **Superseded in pass 2** — sorting renumbered words already on screen and broke TX-3. The live mapping is arrival-ordered and never renumbers; an *export* swaps in a document-ordered mapping for the length of the write and restores the session's afterwards, so the file is a pure function of the book. `persistEditor` no longer stamps the book as edited when a scene is merely opened. | `cf-adv-pdf-det-order`, `cf-pdf-determinism-reload`, `cf-auric-mint-drift`, `tx-vp-determinism-axes` PASS |
+| **D17** | ED-6, TX-14 | ~~Keeps the romanization in the span's place.~~ **Superseded in pass 2** — that put the romanization on the wire, which TX-14 forbids in the same breath as the script. The run stays inside a **marked span**, where the reader can see it is not prose and `claudeSceneText` cannot pick it up. The keep-test also stopped being a conjunction (a span that kept the author's English but lost its tongue was being discarded), and the rule now holds over every carrier, not just `SPAN`. | `cf-assist-nosend`, `cf-adv-assist-tenebrae`, `cf-adv-ex-pua-leak` PASS |
 | **D18** | hygiene | EPUB scene titles survive a ⁂ round trip; the forged style sheet is always last in the head; `window.tenebrae.translate` is `translateSampleLegacy`; an unreadable codex version is no version rather than `v?`; Auric block exhaustion says so; `step1-requirements.md` TR-1/PN-2 are marked superseded by TX-1 with the reason recorded. | `tx-epub-allscripts`, `cf-auric-block-exhaustion` PASS |
 
 ---
 
-## Probes that were themselves wrong
+## What pass 2 found
 
-Nine probe checks were corrected in this pass. Six had recorded the defect as the
+Pass 1 closed all eighteen defects and left six probes red. Five agents were set on
+them, one per probe, each told to decide **from the standard** whether the app had
+regressed or the probe's oracle had gone stale — several probes had been written to
+*record* a defect, so closing it turns them red legitimately. Each diagnosis then went
+to an independent refuter whose brief was to break it.
+
+That second opinion earned its keep: it overturned one verdict outright and broke the
+proposed fix on two more. What follows is what was actually wrong.
+
+### Four pass-1 fixes were defective
+
+| what pass 1 did | what was wrong with it | how it was found |
+|---|---|---|
+| **D17** — a source-less `.tspan` was replaced by its **romanization** as bare prose, to stop the raw run being promoted to prose | TX-14 reads "never as script **or romanization**" — one clause. `claudeSceneText` reads `dataset.src`, so a *span* sends nothing, but the romanization left in its place was ordinary text and went to the API in the author's own sentences. The fix satisfied half the clause by breaking the other half. | refuter on `cf-assist-nosend`, which had *agreed* it was a stale oracle |
+| **D16** — Auric codepoints minted in **sorted** order, so two exports of the same state match | Sorting means a new word renumbers its neighbours, including words already on screen and already in a stored `data-scr`. That is TX-3, a core invariant, traded for a partial clause of TX-10b. Four determinism probes went red at once. | the suite |
+| **D11** — the pad decided before the insert by `padPlan` | `padPlan` read only the *first* character after the selection, so a block ending in collapsible whitespace answered `'space'`, no pad was written, and `data-pad` was cleared. Chromium then had no rendered caret position after the atomic span: `execCommand('delete')` did nothing **and returned true**. Remove and Revert silently failed. | refuter on `tx-vp-span-lifecycle` |
+| **D1/D11** — `ok` taken from `execCommand`'s return value | It lies. The `if(!ok)` fallback therefore never fired. Worse, this was broken at the **certified baseline** too: translate mid-sentence, backspace away the words that followed, then Remove — the span survives and the prose is duplicated. The suite's green there meant "never walked this path", not "correct". | refuter on `tx-vp-span-lifecycle` |
+
+The replacements: the sanitizer keeps a source-less run **inside a marked span** rather
+than promoting anything to prose; the live Auric mapping is arrival-ordered and never
+renumbers, while an **export** swaps in a document-ordered mapping for the length of the
+write and restores the session's afterwards; and removal and revert go through
+`edReplaceSpan`, which gives the command somewhere to land and then judges the outcome
+against **the block's own text**, restoring it byte for byte if anything but the span
+changed.
+
+### Two more real defects, neither in the original report
+
+- **EPUB had no channel for the two asterisms.** `epubSceneInto` and `epubChapterXHTML`
+  both wrote `<p class="ast">⁂</p>`, so the importer read every one as a scene break.
+  **No split rule the app offers round-tripped its own EPUB** — the default invented a
+  phantom untitled scene and stranded a span in it, "Headings" demoted real scene titles.
+  D13's fix had been applied to Markdown only. (X2-8, X2-9)
+- **Separator-shaped prose is deleted on round-trip.** A paragraph the author *types* as
+  `⁂`, or `#`, or a rule of dashes, serialized as a bare line and came back as a scene
+  split with the paragraph gone. Nothing in the suite had ever typed an asterism — every
+  one came from the toolbar's `#fb-break` button, which makes a `div.asterism` the
+  exporter can already mark. (TX-11b)
+
+### Three defects introduced *during* pass 2, caught by the suite
+
+Recorded because they say something about the shape of this work.
+
+1. **`loosePua` parsed untrusted paste markup in a live `<div>`.** A detached div is not
+   inert: the browser loads its images and fires their handlers. `<img src=x onerror=…>`
+   executed on paste, before the sanitizer saw it. ED-6. Caught by `ed-sanitizer`.
+2. **`plan === 'need'` conflated two situations** — "nothing rendered follows" and "a
+   real word follows with no space between". The reconcile trims the whitespace after
+   the pad, and Chromium merges the pad into the same text node as the text after it, so
+   `pad.nodeValue = '\u00A0'` **deleted the rest of the paragraph**. Translate
+   `"the old king "` out of `"the old king waits alone"` and `waits alone` was gone, span
+   placed, no exception. Caught by `tx-vp-selection-shapes`, whose last case is the only
+   one in the suite that selects with a trailing space and prose behind it.
+3. **A reference to `TS_MARK`**, an identifier deleted in pass 1 when the landmark
+   bracketing was replaced by `edReplaceInBlock`. `padPlan` threw on every call and fell
+   through to its `catch`, returning `'need'` unconditionally. Four probes red at once.
+
+Two of these were silent, plausible-looking, and destroyed the author's text. Neither
+survived a suite run. The lesson recorded for the next hand: **a fix to the pad rule is a
+fix to the text-loss surface**, and the suite is the only thing standing between a
+plausible edit there and a lost paragraph.
+
+### Probe oracles corrected in pass 2
+
+Six checks, every one of them only after a refuter had tried and failed to find a real
+defect behind it:
+
+- `cf-assist-nosend` ×2 and `cf-adv-assist-tenebrae` — "teeth" preconditions asserting
+  that the sanitizer promotes the run to prose, and that a plain-text paste of script
+  lands in the scene. Both now assert the fixed behaviour, including that the kept span
+  is *marked*.
+- `cf-ref-tx3-cold-history` — required the private-use **codepoint** to match across two
+  cold sessions with different histories. TX-6c specifies a mint that is
+  history-dependent by definition, and TX-3's axes are repeat calls, reloads and
+  storage-fresh contexts, all of which pass. It now compares the **rune**: outlines and
+  advances pulled from each context's own face with fontTools. Its font check also
+  hashed only length plus the first 64 bytes; it now hashes the whole buffer, and asks
+  that only of the alphabet faces. **This probe was red at the certified baseline too**,
+  so the full report's TX-3 "pass" row over-claimed.
+- `cf-adv-ex-epub-staleauric` and `cf-pdf-determinism-reload` — decoded a *file's*
+  codepoints through the *session's* Auric map, which the export deliberately stopped
+  being. Both now compare outlines through the embedded face; the stale-Auric probe
+  seeds decoy words into the low codepoints and still proves every exported rune right.
+- `ex-md-mapping` — counted bare `⁂` lines, which cannot tell the two asterisms apart and
+  would keep its count if a regression swapped the markers. It now anchors on which is
+  which and on their order.
+
+### Probes added in pass 2
+
+- `cf-span-lastinblock` — a span that is the last rendered thing in its block, reached
+  both ways: placed there, and *made* so afterwards by backspacing the following words.
+  Five shapes, all typed.
+- `cf-md-sepprose` — four separator-shaped lines the author types, through export and
+  re-import.
+
+---
+
+## Probes that were themselves wrong in pass 1
+
+Nine probe checks were corrected in pass 1. Six had recorded the defect as the
 expectation — which is what a gap probe does, and is exactly right until the defect is
 fixed. Three could not have passed against a correct artifact:
 
@@ -144,12 +252,18 @@ In particular:
    layout fixes are proved by a decoder (`cf-pdfcheck2.py`) and by measuring the content
    stream; the printed result is now *known to be on the paper*, which it was not, but
    nobody has printed one.
-4. **Scale.** No manuscript of real novel length. The Auric sorted-mint change makes a
-   new word renumber its neighbours, and `auricPrime` mints a whole book before writing a
-   file — both are correct and both are unmeasured at book length.
+4. **Scale.** No manuscript of real novel length. `auricExportOrder` compiles every
+   document a file will contain before writing it, and re-forges the face as it goes —
+   correct, and unmeasured at book length. `edReplaceSpan` snapshots and may restore the
+   whole block on every span operation; also unmeasured on a very long paragraph.
 5. **TX-12 still has no probe of its own.** Its status in the full report was derived
    from other domains' defects; those defects are closed, but no adversarial work has
    been aimed at the id.
+6. **Nobody has adversarially read pass 2's own work.** Pass 2 exists because pass 1's
+   fixes were read by someone other than their author, and four of them did not survive
+   that. Pass 2's fixes have had the suite, and the suite caught three self-inflicted
+   defects — two of which silently destroyed text — but no independent reader. That is
+   the same gap, one level up.
 
 **New in this pass, and worth an adversarial look:** `edReplaceInBlock` re-serializes and
 re-parses the whole block on every span operation. That is a much bigger blast radius
