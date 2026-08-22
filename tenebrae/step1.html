@@ -2307,6 +2307,12 @@ function exportSheet(scope){
         if(isBook) download(fileSafe(b.title) + '.docx', docxFile(b, 'book'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.docx', docxFile(b, 'scene', s), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); }
       } },
+    { label: 'Download rich text (.rtf)', icon: ICONS.txt, onTap: () => {
+        // §6's Word 97 / Pages / WordPad path: text-based, macro-safe, and
+        // readable by everything that cannot open a .docx
+        if(isBook) download(fileSafe(b.title) + '.rtf', rtfFile(b, 'book'), 'application/rtf');
+        else { const s = currentScene(); if(s) download(fileSafe(s.title || 'untitled scene') + '.rtf', rtfFile(b, 'scene', s), 'application/rtf'); }
+      } },
     { label: 'Download PDF (.pdf)', icon: ICONS.book, onTap: async () => {
         // The PDF carries the outlines itself — that is its whole reason for
         // existing — so it must never be built before the forge has woken. One
@@ -2467,6 +2473,131 @@ function docxFile(book, scope, scene){
     { name: 'word/numbering.xml', data: DOCX_STATIC.numbering },
     { name: 'word/document.xml', data: docXml },
   ]);
+}
+
+/* ================= RTF export =================
+   Spec §6's .doc-compatibility format: "Ship RTF (universally readable by
+   Word/Pages/WordPad, text-based, macro-safe)". The app already READS .rtf;
+   this is the other half.
+
+   RTF has no OpenType shaping and no dependable font embedding, so a translated
+   span rides exactly as it does in .docx, .md and .txt — the romanization in
+   italics, never a raw private-use run, with the author's English bracketed
+   beside it when the gloss option is on. That is TX-11's rule, and RTF is one
+   more format it has to hold in.
+
+   Everything outside ASCII is written as \uN? — a signed 16-bit code unit and
+   an ASCII stand-in for readers too old to understand it. Astral characters are
+   two escapes, one per surrogate, which is what the format asks for. */
+function rtfEsc(t){
+  let out = '';
+  const str = String(t == null ? '' : t);
+  for(let i = 0; i < str.length; i++){
+    const c = str.charAt(i), n = str.charCodeAt(i);
+    if(c === '\\' || c === '{' || c === '}'){ out += '\\' + c; continue; }
+    if(n === 0x0A || n === 0x0D){ out += '\\line '; continue; }
+    if(n === 0x09){ out += '\\tab '; continue; }
+    if(n === 0xA0){ out += '\\~'; continue; }
+    if(n < 0x20) continue;
+    if(n < 0x80){ out += c; continue; }
+    // signed 16-bit, as the spec requires, with a '?' fallback glyph
+    out += '\\u' + (n > 32767 ? n - 65536 : n) + '?';
+  }
+  return out;
+}
+function rtfRunsFrom(node, inherit, gloss){
+  let out = '';
+  const emit = (text, m) => {
+    if(!text) return;
+    const on = (m.b ? '\\b ' : '') + (m.i ? '\\i ' : '') + (m.u ? '\\ul ' : '') + (m.s ? '\\strike ' : '') + (m.sc ? '\\scaps ' : '');
+    const off = (m.sc ? '\\scaps0 ' : '') + (m.s ? '\\strike0 ' : '') + (m.u ? '\\ulnone ' : '') + (m.i ? '\\i0 ' : '') + (m.b ? '\\b0 ' : '');
+    out += on + rtfEsc(text) + off;
+  };
+  const walk = (n, m) => {
+    n.childNodes.forEach(c => {
+      if(c.nodeType === 3){ emit(c.nodeValue, m); return; }
+      if(c.nodeType !== 1) return;
+      const tag = c.tagName;
+      if(tag === 'BR'){ out += '\\line '; return; }
+      if(tag === 'SPAN' && c.classList.contains('tspan')){
+        const rom = c.dataset.rom || c.textContent;
+        emit(rom, Object.assign({}, m, { i: true }));
+        if(gloss && c.dataset.src && c.dataset.src !== rom) emit(' [' + c.dataset.src + ']', m);
+        return;
+      }
+      const next = Object.assign({}, m);
+      if(tag === 'B' || tag === 'STRONG') next.b = true;
+      if(tag === 'I' || tag === 'EM') next.i = true;
+      if(tag === 'U') next.u = true;
+      if(tag === 'S' || tag === 'STRIKE' || tag === 'DEL') next.s = true;
+      if(tag === 'SPAN' && c.classList.contains('sc')) next.sc = true;
+      walk(c, next);
+    });
+  };
+  walk(node, inherit || {});
+  return out;
+}
+const rtfPara = (body, opt) => {
+  const o = opt || {};
+  let pr = '\\pard\\sa160\\sl276\\slmult1';
+  if(o.jc) pr += '\\q' + o.jc;
+  if(o.ind) pr += '\\li' + o.ind + '\\ri' + o.ind;
+  if(o.size) pr += '\\fs' + o.size;
+  if(o.b) pr += '\\b ';
+  return pr + ' ' + body + (o.b ? '\\b0 ' : '') + '\\par\n';
+};
+const rtfTextP = (text, opt) => rtfPara(rtfEsc(text), opt);
+function rtfScenePs(doc, gloss){
+  const tpl = document.createElement('template');
+  tpl.innerHTML = doc || '';
+  const ps = [];
+  tpl.content.childNodes.forEach(n => {
+    if(n.nodeType === 3){ const t = n.nodeValue.trim(); if(t) ps.push(rtfTextP(t)); return; }
+    if(n.nodeType !== 1) return;
+    const tag = n.tagName;
+    if(tag === 'DIV' && n.classList.contains('asterism')){ ps.push(rtfTextP('⁂', { jc: 'c' })); return; }
+    if(tag === 'H2'){ ps.push(rtfPara(rtfRunsFrom(n, null, gloss), { b: true, size: 30 })); return; }
+    if(tag === 'H3'){ ps.push(rtfPara(rtfRunsFrom(n, null, gloss), { b: true, size: 26 })); return; }
+    if(tag === 'BLOCKQUOTE'){ ps.push(rtfPara(rtfRunsFrom(n, null, gloss), { ind: 720 })); return; }
+    if(tag === 'UL' || tag === 'OL'){
+      let i = 1;
+      n.querySelectorAll(':scope > li').forEach(li => {
+        const mark = tag === 'UL' ? '\\u8226?\\tab ' : (i++) + '.\\tab ';
+        ps.push(rtfPara(mark + rtfRunsFrom(li, null, gloss), { ind: 360 }));
+      });
+      return;
+    }
+    ps.push(rtfPara(rtfRunsFrom(n, null, gloss)));
+  });
+  return ps;
+}
+function rtfFile(book, scope, scene){
+  const o = book.exportOpts || defaultExportOpts();
+  const ps = [];
+  if(scope === 'book'){
+    ps.push(rtfTextP(book.title, { jc: 'c', b: true, size: 44 }));
+    book.chapters.forEach(ch => {
+      if(o.chapterTitles) ps.push(rtfTextP(ch.title, { b: true, size: 36 }));
+      const scenes = [];
+      ch.scenes.forEach(s => {
+        const body = rtfScenePs(s.doc, o.sourceGloss);
+        if(!body.length && !(o.sceneTitles && s.title)) return;
+        scenes.push({ title: s.title, body });
+      });
+      scenes.forEach((s, i) => {
+        if(i > 0 && o.asterism) ps.push(rtfTextP('⁂', { jc: 'c' }));
+        if(o.sceneTitles && s.title) ps.push(rtfTextP(s.title, { b: true, size: 30 }));
+        ps.push.apply(ps, s.body);
+      });
+    });
+  }else{
+    if(scene.title) ps.push(rtfTextP(scene.title, { b: true, size: 30 }));
+    ps.push.apply(ps, rtfScenePs(scene.doc, o.sourceGloss));
+  }
+  return '{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n' +
+         '{\\fonttbl{\\f0\\froman\\fcharset0 Georgia;}}\n' +
+         '{\\info{\\title ' + rtfEsc(book.title) + '}}\n' +
+         '\\fs24\n' + ps.join('') + '}';
 }
 
 /* ================= EPUB export =================

@@ -88,12 +88,15 @@ demonstrated against the running app.
   `cols-rtl` and `btt-stave` are set as their own blocks, keeping the common ceiling and the
   common ground; an inline column nine ems tall would wreck a printed page. Byte-deterministic
   for identical state.
-- **TX-11** (F) **Other formats stay legible.** DOCX/Markdown/plain text carry romanization
+- **TX-11** (F) **Other formats stay legible.** DOCX/RTF/Markdown/plain text carry romanization
   (never raw PUA) and keep the English source recoverable. Markdown hides the source in a
   `<!--tenebrae:begin …-->` marker so it round-trips into a live span. Plain text and .docx
   cannot carry markers, so they print the English bracketed beside the romanization —
   `exportOpts.sourceGloss`, on by default, togglable from the export sheet. The .docx
-  romanization stays its own italic run; the gloss is a separate upright run.
+  romanization stays its own italic run; the gloss is a separate upright run. RTF is
+  spec §6's Word 97 / Pages / WordPad path and holds the same rule: a 7-bit file, every
+  character above ASCII escaped as `\uN?`, and the escapes decode back to exactly what
+  the author wrote.
 - **TX-11b** (F) **Our own Markdown round-trips exactly.** A Tenebrae export stamps
   `<!--tenebrae:doc-->` on the file and marks what a bare line cannot say for itself,
   because every one of these glyphs means two things: `<!--tenebrae:scene-->` on a
