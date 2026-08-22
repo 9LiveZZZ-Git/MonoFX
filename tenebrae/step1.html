@@ -4448,7 +4448,11 @@ function padPlan(range){
     // NBSP counts as rendered — trim() would call it whitespace and earn the
     // span a second pad it does not need.
     const rest = probe.toString();
-    if(!/[^\t\n\r ]/.test(rest)) return 'need';              // nothing rendered follows
+    // 'tail' and 'need' both want a pad, but only 'tail' knows that everything
+    // after it is collapsible whitespace. Telling them apart is load-bearing:
+    // the reconcile trims what follows the pad, and doing that when a real word
+    // follows deletes the rest of the author's paragraph.
+    if(!/[^\t\n\r ]/.test(rest)) return 'tail';              // nothing rendered follows
     const ch = rest.charAt(0);
     if(/[,.;:!?\u2026)\]}\u00bb\u201d\u2019%]/.test(ch)) return 'punct';   // no gap at all
     if(/[\s\u00A0]/.test(ch)) return 'space';                // the author's own gap
@@ -4513,9 +4517,10 @@ function placeTSpan(span, langLabel){
       inlineChain = inlineChainOf(startEl, hostBlock);
     }
   }
-  const plan = range ? padPlan(range) : 'need';
-  if(plan === 'need') span.dataset.pad = '1'; else delete span.dataset.pad;
-  const padStr = plan === 'need' ? ' ' : '';
+  const plan = range ? padPlan(range) : 'tail';
+  const wantPad = plan === 'need' || plan === 'tail';
+  if(wantPad) span.dataset.pad = '1'; else delete span.dataset.pad;
+  const padStr = wantPad ? ' ' : '';
   let placed = false;
   // the whole block in one command — see edReplaceInBlock
   if(range) placed = !!edReplaceInBlock(range, chain => inlineWrap(spanOuterHTML(span), chain) + padStr);
@@ -4559,16 +4564,18 @@ function placeTSpan(span, langLabel){
     const pad = padAfter(live);
     const has = !!(pad && pad.nodeValue.charCodeAt(0) === 0x00A0);
     if(!has) delete live.dataset.pad;
-    else if(plan === 'need'){
+    else if(plan === 'tail'){
       live.dataset.pad = '1';
       // nothing rendered followed the selection, so everything past our pad is
       // collapsible whitespace the author cannot see — but leave it doubled and
       // it becomes a visible gap the moment they type on. Leave exactly the pad.
+      // Only ever on 'tail': under 'need' the author's next word is in there.
       pad.nodeValue = '\u00A0';
       for(let nx = pad.nextSibling; nx && nx.nodeType === 3 && !/[^\t\n\r ]/.test(nx.nodeValue);){
         const gone = nx; nx = nx.nextSibling; gone.remove();
       }
     }
+    else if(plan === 'need') live.dataset.pad = '1';
     else if(plan === 'punct'){
       const rest = pad.nodeValue.slice(1);
       if(rest) pad.nodeValue = rest; else pad.remove();
