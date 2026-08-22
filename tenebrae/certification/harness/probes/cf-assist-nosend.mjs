@@ -217,7 +217,9 @@ await closeSheet();
 const applyGuard = await page.evaluate(async ({ lang }) => {
   const ed = document.querySelector('#ed-content');
   ed.innerHTML = `<p>Opening prose here.</p><p><span class="tspan" contenteditable="false" data-lang="${lang}" data-src="the lamp holds steady" data-rom="the lamp holds steady">the lamp holds steady</span></p>`;
-  window.__reply = { fixes: [{ before: 'the lamp holds steady', after: 'THE LAMP HELD STEADY', why: 'tense', kind: 'tense' }] };
+  // a genuine mechanical edit — the mechanical-edit threshold drops a rewrite,
+  // and what is under test here is the APPLY guard, not the filter
+  window.__reply = { fixes: [{ before: 'holds steady', after: 'held steady', why: 'tense', kind: 'tense' }] };
   const scene = window.tenebrae._claude.sceneText(ed.innerHTML);
   const fixes = await window.tenebrae._claude.grammar(scene);
   return { scene, offered: fixes.length };

@@ -4987,7 +4987,7 @@ try{
     _claude: { ready: () => claudeReady(), setKey: k => { claudeKey = k; return kvSet('claudeKey', k); },
                model: () => claudeModel, sceneText: doc => claudeSceneText(doc),
                grammar: t => claudeGrammar(t), cards: (t, k) => claudeCards(t, k),
-               endpoint: () => CLAUDE_ENDPOINT },
+               last: () => claudeLast, endpoint: () => CLAUDE_ENDPOINT },
     _forge: { map: () => omniForged,
               textFor: (langId, word) => omniScriptText(langId, [{ t: String(word) }]),
               textForToks: (langId, toks) => omniScriptText(langId, toks || []),
@@ -5175,6 +5175,56 @@ function normText(src){ return normIndexed(src).text; }
 // Script codepoints have no business there — the codex writes those — and a
 // bidi override is invisible and reorders everything after it.
 const ANSWER_HOSTILE = /[\uE000-\uF8FF\u202A-\u202E\u2066-\u2069\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+// §3.4's structural defence: "any suggestion whose suggestion diverges from
+// original beyond a mechanical-edit threshold is dropped client-side, so the
+// model cannot smuggle in prose rewriting."
+//
+// A copy-edit is a spelling, a comma, an agreement, a tense, a dropped or
+// doubled word. Every one of those is a SMALL edit. A rewrite — the thing the
+// author did not ask for and would not notice being offered one fix at a time —
+// replaces most of the words while looking, in a sheet, exactly like a
+// correction. The schema cannot express the difference and the prompt can only
+// ask for it, so it is measured here instead.
+// maxEdits is the one that actually stops a rewrite. A fraction alone gets more
+// permissive the longer the anchor — 45% of a 200-character quote is ninety
+// characters of change, which is a rewrite by any reading — so the number of
+// characters a correction may touch is bounded outright. A spelling is one or
+// two, a transposition two, a tense a handful; twenty-four is already generous.
+// floor is set so that ANY single token may be replaced outright: a wrong word,
+// a malapropism, a misspelled name are all ordinary copy-edits, and edit
+// distance cannot tell "reeve -> reave" from "reeve -> drover". Twelve is about
+// the length of a word. Below that the rule would draw an arbitrary line
+// between two substitutions that differ only in how alike the words happen to
+// look. Rewriting is caught by the ratio and by maxEdits, not here.
+const MECHANICAL = { maxLen: 240, maxRatio: 2.5, minRatio: 0.4, maxEditFrac: 0.45, floor: 12, maxEdits: 24 };
+function editDistance(a, b){
+  // Levenshtein, one row at a time. Anchors are capped at MECHANICAL.maxLen
+  // before this is called, so the work is bounded.
+  const m = a.length, n = b.length;
+  let prev = new Array(n + 1);
+  for(let j = 0; j <= n; j++) prev[j] = j;
+  for(let i = 1; i <= m; i++){
+    const cur = new Array(n + 1);
+    cur[0] = i;
+    for(let j = 1; j <= n; j++){
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+function isMechanicalEdit(before, after){
+  const a = String(before), b = String(after);
+  // an anchor this long is not a correction, whatever it does with it
+  if(a.length > MECHANICAL.maxLen || b.length > MECHANICAL.maxLen) return false;
+  if(!b) return true;                    // striking a doubled word is mechanical
+  const ratio = b.length / a.length;
+  if(ratio > MECHANICAL.maxRatio || ratio < MECHANICAL.minRatio) return false;
+  const d = editDistance(a, b);
+  const allowed = Math.min(MECHANICAL.maxEdits,
+    Math.max(MECHANICAL.floor, Math.ceil(Math.max(a.length, b.length) * MECHANICAL.maxEditFrac)));
+  return d <= allowed;
+}
 async function claudeGrammar(text){
   const out = await claudeAsk(CLAUDE_GRAMMAR_SYSTEM,
     'Read this scene and report objective errors only.\n\n<scene>\n' + text + '\n</scene>', CLAUDE_GRAMMAR_SCHEMA);
@@ -5185,7 +5235,8 @@ async function claudeGrammar(text){
   // the guardrail: a fix whose "before" is not in the scene, or is not unique,
   // cannot be applied safely — drop it rather than offer an edit that misfires
   const seen = new Set();
-  return fixes.filter(f => {
+  let rewrites = 0;
+  const kept = fixes.filter(f => {
     if(!f || typeof f.before !== 'string' || typeof f.after !== 'string') return false;
     if(!f.before.trim() || f.before === f.after) return false;
     if(ANSWER_HOSTILE.test(f.before) || ANSWER_HOSTILE.test(f.after)) return false;
@@ -5193,6 +5244,11 @@ async function claudeGrammar(text){
     if(n !== 1) return false;
     if(seen.has(f.before)) return false;
     seen.add(f.before);
+    // last, and only on fixes that would otherwise have been offered: an anchor
+    // that is not in the scene was never a rewrite, it was noise, and counting
+    // it as one would tell the author their model tried to rewrite them when it
+    // merely hallucinated a line
+    if(!isMechanicalEdit(f.before, f.after)){ rewrites++; return false; }
     // Remember the words around the anchor in the scene the model actually
     // read. Accepting an earlier fix can manufacture a second occurrence of
     // this one — reeve -> drover, and now "drover" is in two places — and the
@@ -5202,6 +5258,13 @@ async function claudeGrammar(text){
     f.post = text.slice(at + f.before.length, at + f.before.length + 64);
     return true;
   });
+  // How many were rewrites matters to the author — "the scene reads clean" is a
+  // different message from "it wanted to rewrite you, and I did not let it" —
+  // but it is metadata about the call, not part of the answer, so it rides on
+  // claudeLast with the model and the token usage rather than changing what
+  // this function returns to its six callers.
+  claudeLast.rewrites = rewrites;
+  return kept;
 }
 
 /* ---- pass 2: card harvesting ---- */
@@ -5347,7 +5410,14 @@ function claudeGrammarSheet(){
   if(!text.trim()){ toast('Nothing written in this scene yet'); return; }
   toast('Reading the scene…');
   claudeGrammar(text).then(fixes => {
-    if(!fixes.length){ toast('Nothing to correct — the scene reads clean'); return; }
+    const rewrites = (claudeLast && claudeLast.rewrites) || 0;
+    if(!fixes.length){
+      toast(rewrites
+        ? `Nothing to correct — ${plural(rewrites, 'suggestion')} dropped for rewriting rather than fixing`
+        : 'Nothing to correct — the scene reads clean');
+      return;
+    }
+    if(rewrites) toast(`${plural(rewrites, 'suggestion')} dropped for rewriting rather than fixing`);
     let left = fixes.slice();
     const render = () => {
       if(!left.length){ closeSheet(); toast('Done'); return; }

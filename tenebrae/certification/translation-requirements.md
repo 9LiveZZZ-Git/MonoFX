@@ -115,6 +115,16 @@ demonstrated against the running app.
 - **TX-14** (F) **The Tenebrae is never sent.** A translated span goes to the API as the
   author's stored English, never as script or romanization — no PUA codepoint may appear in
   any request body — and no accepted edit may land inside a span.
+- **TX-15b** (F) **A copy-edit is a correction, not a rewrite.** Spec §3.4's structural
+  defence: a suggestion whose replacement diverges from its anchor beyond a
+  mechanical-edit threshold is dropped client-side, so prose rewriting cannot be
+  smuggled in one accept at a time — in a sheet that says "Copy-edit 3 of 7", a rewrite
+  reads exactly like a correction. The threshold is measured, not asked for: an anchor
+  longer than a correction needs, a replacement disproportionate to it, or more
+  characters changed than any correction touches. A single token may always be replaced
+  outright — edit distance cannot tell a misspelled name from the wrong word, and both
+  are ordinary copy-edits. What was dropped is reported, because "the scene reads clean"
+  and "it wanted to rewrite you" are different answers.
 - **TX-15** (F) **Constrained answers, verified claims.** Requests use
   `output_config.format` with a closed JSON schema (`additionalProperties: false`
   throughout), the documented headers (`anthropic-version`, `x-api-key`, and an explicit

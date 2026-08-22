@@ -147,7 +147,19 @@ ck('undo reverses it (execCommand, not innerHTML)', /stands open/.test(undone.do
 /* ---------- 7. markup in a replacement stays literal ---------- */
 await page.evaluate(() => { document.querySelector('#ed-content').innerHTML = '<p>The lantern burns low.</p>'; });
 await T(250);
-await page.evaluate(() => { window.__reply = { fixes: [{ before: 'burns low', after: '<b onmouseover="alert(1)">burns low</b>', why: 'markup', kind: 'grammar' }] }; });
+// The handler-bearing version is now dropped before it is ever offered — thirty
+// characters of markup wrapped round nine of text is not a correction, and the
+// mechanical-edit threshold says so. Check that, then offer a replacement small
+// enough to survive the threshold, so what execCommand does with markup is
+// still under test.
+await page.evaluate(async () => {
+  window.__reply = { fixes: [{ before: 'burns low', after: '<b onmouseover="alert(1)">burns low</b>', why: 'markup', kind: 'grammar' }] };
+  window.__hostileMarkup = (await window.tenebrae._claude.grammar('The lantern burns low.')).length;
+});
+ck('a replacement that wraps the anchor in markup is dropped as a rewrite',
+   (await page.evaluate(() => window.__hostileMarkup)) === 0,
+   String(await page.evaluate(() => window.__hostileMarkup)));
+await page.evaluate(() => { window.__reply = { fixes: [{ before: 'burns low', after: '<b>burns low</b>', why: 'markup', kind: 'grammar' }] }; });
 await page.click('#ed-more'); await T(500);
 await page.locator('#sheet .sh-item', { hasText: 'Copy-edit this scene' }).click();
 await T(1400);
@@ -156,7 +168,7 @@ await T(900);
 const markup = await page.evaluate(() => ({ html: document.querySelector('#ed-content').innerHTML, text: document.querySelector('#ed-content').textContent }));
 console.log('   after a markup replacement:', JSON.stringify(markup.html).slice(0, 200));
 ck('markup in a replacement is inserted as literal text, not parsed',
-   !/<b[ >]/i.test(markup.html) && markup.text.includes('<b onmouseover'), JSON.stringify(markup.html).slice(0, 160));
+   !/<b[ >]/i.test(markup.html) && markup.text.includes('<b>burns low</b>'), JSON.stringify(markup.html).slice(0, 160));
 ck('no element with an inline handler exists in the editor', !(await page.evaluate(() => !!document.querySelector('#ed-content [onmouseover]'))));
 await closeSheet();
 
@@ -190,14 +202,23 @@ const huge = await page.evaluate(async () => {
   const fixes = [];
   for(let i = 0; i < 5000; i++) fixes.push({ before: 'phantom anchor ' + i, after: 'x' + i, why: 'w', kind: 'grammar' });
   fixes.push({ before: 'Alpha', after: 'A'.repeat(200000), why: 'huge replacement', kind: 'spelling' });
+  fixes.push({ before: 'teh gate', after: 'the gate', why: 'a real one', kind: 'spelling' });
   window.__reply = { fixes };
-  const out = await window.tenebrae._claude.grammar('Alpha stands at the gate.');
-  return { kept: out.length, firstAfterLen: out[0] ? out[0].after.length : 0 };
+  const out = await window.tenebrae._claude.grammar('Alpha stands at teh gate.');
+  return { kept: out.length, keptBefore: out[0] ? out[0].before : null,
+           firstAfterLen: out[0] ? out[0].after.length : 0,
+           rewrites: (window.tenebrae._claude.last() || {}).rewrites };
 });
 console.log('   huge answer ->', JSON.stringify(huge), 'in', Date.now() - t0, 'ms');
-ck('5000 phantom fixes are all dropped, the one real anchor survives', huge.kept === 1, JSON.stringify(huge));
-ck('a 200k-character replacement is not truncated or crashed on, and the app is alive',
-   huge.firstAfterLen === 200000 && errors.length === 0, huge.firstAfterLen);
+ck('5000 phantom fixes are all dropped, the one real correction survives',
+   huge.kept === 1 && huge.keptBefore === 'teh gate', JSON.stringify(huge));
+// A 200,000-character "replacement" for a five-letter anchor is not a
+// correction by any measure, and it is now refused before it can be offered —
+// which is a better outcome than offering it intact. What still matters is that
+// the app does not truncate it into something plausible, hang on it, or throw.
+ck('a 200k-character replacement is refused as a rewrite, not truncated into something plausible',
+   huge.firstAfterLen !== 200000 && huge.rewrites >= 1 && errors.length === 0,
+   JSON.stringify({ firstAfterLen: huge.firstAfterLen, rewrites: huge.rewrites, errors: errors.length }));
 
 /* ---------- 10. a hostile shape cannot poison the runtime ---------- */
 const poison = await page.evaluate(async () => {
